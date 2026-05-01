@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useEffect } from 'react'
 import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar, Cell, Legend
@@ -20,6 +20,18 @@ const DEFAULT_ROUNDS = [
     id: 2, name: 'Series A', newShares: 0,
     investment: 10000000, preMoneyVal: 30000000, optionPool: 1000000
   },
+]
+
+// Round templates ordered by typical timeline (earliest -> latest).
+// Investment / preMoneyVal are stored in raw dollars; UI displays them as $K.
+const ROUND_TEMPLATES = [
+  { name: 'Pre-Seed',    investment:    250000, preMoneyVal:   2000000, optionPool: 200000 },
+  { name: 'Angel',       investment:    500000, preMoneyVal:   4000000, optionPool: 250000 },
+  { name: 'Accelerator', investment:    125000, preMoneyVal:   1500000, optionPool: 100000 },
+  { name: 'Seed',        investment:   1500000, preMoneyVal:   8500000, optionPool: 500000 },
+  { name: 'Series A',    investment:  10000000, preMoneyVal:  30000000, optionPool: 1000000 },
+  { name: 'Series B',    investment:  25000000, preMoneyVal:  90000000, optionPool: 1500000 },
+  { name: 'Series C',    investment:  50000000, preMoneyVal: 200000000, optionPool: 2000000 },
 ]
 
 function fmt(n) {
@@ -145,17 +157,17 @@ function RoundRow({ round, onUpdate, onRemove, index }) {
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
         <div>
-          <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Pre-Money Val</label>
+          <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Pre-Money Val ($K)</label>
           <div style={{ position: 'relative' }}>
             <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>$</span>
-            <input type="number" value={round.preMoneyVal} onChange={e => update('preMoneyVal', +e.target.value)} style={{ paddingLeft: 22 }} />
+            <input type="number" value={round.preMoneyVal / 1000} onChange={e => update('preMoneyVal', (+e.target.value) * 1000)} style={{ paddingLeft: 22 }} />
           </div>
         </div>
         <div>
-          <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Investment</label>
+          <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Investment ($K)</label>
           <div style={{ position: 'relative' }}>
             <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>$</span>
-            <input type="number" value={round.investment} onChange={e => update('investment', +e.target.value)} style={{ paddingLeft: 22 }} />
+            <input type="number" value={round.investment / 1000} onChange={e => update('investment', (+e.target.value) * 1000)} style={{ paddingLeft: 22 }} />
           </div>
         </div>
         <div>
@@ -163,6 +175,57 @@ function RoundRow({ round, onUpdate, onRemove, index }) {
           <input type="number" value={round.optionPool} onChange={e => update('optionPool', +e.target.value)} />
         </div>
       </div>
+    </div>
+  )
+}
+
+function AddRoundDropdown({ onAdd }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDocClick = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [open])
+
+  const items = [...ROUND_TEMPLATES, { name: 'Custom', custom: true }]
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        style={{
+          background: 'var(--accent-dim)', border: '1px solid var(--accent)',
+          color: 'var(--accent)', fontSize: 11, borderRadius: 4,
+          padding: '3px 10px', letterSpacing: '0.05em',
+          fontFamily: 'DM Mono', cursor: 'pointer',
+        }}
+      >+ ROUND ▾</button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 50,
+          background: '#14141f', border: '1px solid var(--border-accent)',
+          borderRadius: 6, padding: 4, minWidth: 160,
+          boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
+        }}>
+          {items.map((it) => (
+            <button
+              key={it.name}
+              onClick={() => { onAdd(it.custom ? null : it); setOpen(false) }}
+              style={{
+                display: 'block', width: '100%', textAlign: 'left',
+                background: 'none', border: 'none', color: 'var(--text)',
+                fontSize: 12, fontFamily: 'DM Mono', padding: '7px 10px',
+                borderRadius: 4, cursor: 'pointer',
+              }}
+              onMouseEnter={e => e.currentTarget.style.background = 'rgba(124,108,252,0.12)'}
+              onMouseLeave={e => e.currentTarget.style.background = 'none'}
+            >{it.name}</button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -206,14 +269,19 @@ export default function App() {
     return Array.from(keys)
   }, [chartData])
 
-  const addRound = () => {
-    const last = rounds[rounds.length - 1]
+  const addRound = (template) => {
+    const t = template ?? {
+      name: 'Custom',
+      investment: 20000000,
+      preMoneyVal: ((rounds[rounds.length - 1]?.preMoneyVal) || 10000000) * 3,
+      optionPool: 500000,
+    }
     setRounds([...rounds, {
       id: Date.now(),
-      name: `Series ${String.fromCharCode(65 + rounds.length - 1)}`,
-      investment: 20000000,
-      preMoneyVal: (last?.preMoneyVal || 0) * 3,
-      optionPool: 500000,
+      name: t.name,
+      investment: t.investment,
+      preMoneyVal: t.preMoneyVal,
+      optionPool: t.optionPool,
     }])
   }
 
@@ -299,15 +367,7 @@ export default function App() {
               <span style={{ fontFamily: 'Syne', fontWeight: 700, fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
                 Funding Rounds
               </span>
-              <button
-                onClick={addRound}
-                style={{
-                  background: 'var(--accent-dim)', border: '1px solid var(--accent)',
-                  color: 'var(--accent)', fontSize: 11, borderRadius: 4,
-                  padding: '3px 10px', letterSpacing: '0.05em',
-                  fontFamily: 'DM Mono',
-                }}
-              >+ ROUND</button>
+              <AddRoundDropdown onAdd={addRound} />
             </div>
             {rounds.map((r, idx) => (
               <RoundRow key={r.id} round={r} index={idx} onUpdate={updateRound} onRemove={removeRound} />
