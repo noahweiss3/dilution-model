@@ -29,14 +29,19 @@ const DEFAULT_ROUNDS = [
 // Round templates ordered by typical timeline (earliest -> latest).
 // Investment / preMoneyVal stored in raw dollars; UI shows them in the round's chosen `unit` ($K or $M).
 const ROUND_TEMPLATES = [
-  { name: 'Pre-Seed',    investment:    250000, preMoneyVal:   2000000, unit: 'K', grantMode: 'shares', grantValue: 100000 },
-  { name: 'Angel',       investment:    500000, preMoneyVal:   4000000, unit: 'K', grantMode: 'shares', grantValue: 100000 },
+  { name: 'Angel',       investment:    100000, preMoneyVal:   1500000, unit: 'K', grantMode: 'shares', grantValue:  50000 },
   { name: 'Accelerator', investment:    125000, preMoneyVal:   1500000, unit: 'K', grantMode: 'shares', grantValue:  50000 },
+  { name: 'Pre-Seed',    investment:    500000, preMoneyVal:   4000000, unit: 'K', grantMode: 'shares', grantValue: 100000 },
   { name: 'Seed',        investment:   1500000, preMoneyVal:   8500000, unit: 'K', grantMode: 'shares', grantValue: 200000 },
   { name: 'Series A',    investment:  10000000, preMoneyVal:  30000000, unit: 'M', grantMode: 'shares', grantValue: 400000 },
   { name: 'Series B',    investment:  25000000, preMoneyVal:  90000000, unit: 'M', grantMode: 'shares', grantValue: 600000 },
   { name: 'Series C',    investment:  50000000, preMoneyVal: 200000000, unit: 'M', grantMode: 'shares', grantValue: 800000 },
+  { name: 'Series D',    investment: 100000000, preMoneyVal: 500000000, unit: 'M', grantMode: 'shares', grantValue: 1000000 },
 ]
+
+// Sort key: position in ROUND_TEMPLATES (earlier index = earlier round). Custom and unknowns go last (preserved relative order).
+const ROUND_ORDER = Object.fromEntries(ROUND_TEMPLATES.map((t, i) => [t.name, i]))
+const sortKeyFor = (name) => ROUND_ORDER[name] ?? Number.MAX_SAFE_INTEGER
 
 const UNIT_DIVISOR = { K: 1000, M: 1000000 }
 
@@ -55,16 +60,24 @@ function pct(n) {
 const RESERVE_KEY = 'Employee Reserve (Unallocated)'
 const GRANTED_KEY = 'Employees (Granted)'
 
-function computeRounds(founders, rounds, employeeReserve = 0) {
+function computeRounds(founders, rounds, employeeReserve = 0, employeesOnCapTablePreGrant = true) {
   const founderTotal = founders.reduce((s, f) => s + (f.shares || 0), 0)
-  const reserveShares = Math.max(0, Math.round(employeeReserve || 0))
-  const preFundTotal = founderTotal + reserveShares
+  const reserveCap = Math.max(0, Math.round(employeeReserve || 0))
+
+  // Two modes:
+  //   preGrant=true  → entire reserve is issued upfront and dilutes everyone now; grants
+  //                    transfer from "Unallocated" to "Granted" (no new shares issued).
+  //   preGrant=false → reserve is just a budget cap; granting issues NEW shares each round
+  //                    (dilutes everyone at grant time). No "Unallocated" bucket on the cap table.
+  const reserveIssuedUpfront = employeesOnCapTablePreGrant ? reserveCap : 0
+  const preFundTotal = founderTotal + reserveIssuedUpfront
+
   let states = []
   let prevTotal = preFundTotal
-  let unallocatedReserve = reserveShares
+  let unallocatedReserve = reserveIssuedUpfront
   let granted = 0
 
-  // Pre-funding state — founders + employee reserve already issued
+  // Pre-funding state
   const preFund = {
     label: 'Pre-Funding',
     totalShares: preFundTotal,
@@ -77,8 +90,8 @@ function computeRounds(founders, rounds, employeeReserve = 0) {
   founders.forEach(f => {
     preFund.ownership[f.name] = preFundTotal > 0 ? f.shares / preFundTotal : 0
   })
-  if (reserveShares > 0) {
-    preFund.ownership[RESERVE_KEY] = reserveShares / preFundTotal
+  if (employeesOnCapTablePreGrant && reserveIssuedUpfront > 0) {
+    preFund.ownership[RESERVE_KEY] = reserveIssuedUpfront / preFundTotal
   }
   states.push(preFund)
 
@@ -89,20 +102,30 @@ function computeRounds(founders, rounds, employeeReserve = 0) {
 
     const pricePerShare = prevTotal > 0 ? preVal / prevTotal : 0
     const newInvestorShares = pricePerShare > 0 ? Math.round(invest / pricePerShare) : 0
-    const newTotal = prevTotal + newInvestorShares
 
-    // Resolve grant for this round (transfer from reserve -> granted, no new shares).
+    // Resolve grant for this round.
     let grantShares = 0
     if (round.grantMode === 'pct') {
-      // Grant X% of TOTAL employee reserve (not round size, not remaining).
       const pct = (round.grantValue || 0) / 100
-      grantShares = Math.round(pct * reserveShares)
+      grantShares = Math.round(pct * reserveCap)
     } else {
       grantShares = Math.round(round.grantValue || 0)
     }
-    grantShares = Math.max(0, Math.min(grantShares, unallocatedReserve))
-    unallocatedReserve -= grantShares
-    granted += grantShares
+    // Cap by remaining grant budget (total reserve - already-granted).
+    const grantBudgetRemaining = Math.max(0, reserveCap - granted)
+    grantShares = Math.max(0, Math.min(grantShares, grantBudgetRemaining))
+
+    let newTotal
+    if (employeesOnCapTablePreGrant) {
+      // Grant transfers from unallocated to granted; total only grows from investor issuance.
+      newTotal = prevTotal + newInvestorShares
+      unallocatedReserve -= grantShares
+      granted += grantShares
+    } else {
+      // Grant issues new shares this round, alongside investor shares.
+      newTotal = prevTotal + newInvestorShares + grantShares
+      granted += grantShares
+    }
 
     const state = {
       label: round.name,
@@ -124,7 +147,7 @@ function computeRounds(founders, rounds, employeeReserve = 0) {
       state.ownership[f.name] = founderShareCount / newTotal
     })
 
-    // Investors from previous rounds — keep their absolute shares, dilute by new total.
+    // Investors from previous rounds — keep absolute shares, dilute by new total.
     states.forEach((s, si) => {
       if (si === 0) return
       const key = s.label
@@ -135,9 +158,11 @@ function computeRounds(founders, rounds, employeeReserve = 0) {
     // New investors this round.
     state.ownership[round.name] = newInvestorShares / newTotal
 
-    // Reserve & granted are absolute share counts that diluted with new issuance.
-    if (reserveShares > 0) {
+    // Employee buckets.
+    if (employeesOnCapTablePreGrant) {
       if (unallocatedReserve > 0) state.ownership[RESERVE_KEY] = unallocatedReserve / newTotal
+      if (granted > 0) state.ownership[GRANTED_KEY] = granted / newTotal
+    } else {
       if (granted > 0) state.ownership[GRANTED_KEY] = granted / newTotal
     }
 
@@ -350,11 +375,15 @@ const CustomTooltip = ({ active, payload, label, mode }) => {
 export default function App() {
   const [founders, setFounders] = useState(DEFAULT_FOUNDERS)
   const [employeeReserve, setEmployeeReserve] = useState(DEFAULT_RESERVE)
+  const [employeesOnCapTablePreGrant, setEmployeesOnCapTablePreGrant] = useState(true)
   const [rounds, setRounds] = useState(DEFAULT_ROUNDS)
   const [activeTab, setActiveTab] = useState('chart')
   const [valueMode, setValueMode] = useState('pct') // 'pct' | 'shares'
 
-  const states = useMemo(() => computeRounds(founders, rounds, employeeReserve), [founders, rounds, employeeReserve])
+  const states = useMemo(
+    () => computeRounds(founders, rounds, employeeReserve, employeesOnCapTablePreGrant),
+    [founders, rounds, employeeReserve, employeesOnCapTablePreGrant]
+  )
 
   const chartData = states.map(state => {
     const row = { name: state.label }
@@ -390,7 +419,7 @@ export default function App() {
       grantMode: 'shares',
       grantValue: 0,
     }
-    setRounds([...rounds, {
+    const newRound = {
       id: Date.now(),
       name: t.name,
       investment: t.investment,
@@ -398,7 +427,18 @@ export default function App() {
       unit: t.unit || 'K',
       grantMode: t.grantMode || 'shares',
       grantValue: t.grantValue ?? 0,
-    }])
+    }
+    // Insert in correct sorted position based on ROUND_TEMPLATES order.
+    // Place AFTER the last round whose sort key is <= new round's sort key.
+    const newKey = sortKeyFor(newRound.name)
+    let insertAt = rounds.length
+    for (let i = rounds.length - 1; i >= 0; i--) {
+      if (sortKeyFor(rounds[i].name) <= newKey) { insertAt = i + 1; break }
+      insertAt = i
+    }
+    const next = rounds.slice()
+    next.splice(insertAt, 0, newRound)
+    setRounds(next)
   }
 
   const updateRound = (idx, field, val) => {
@@ -604,6 +644,28 @@ export default function App() {
                 onChange={e => setEmployeeReserve(Math.max(0, +e.target.value))}
                 placeholder="0"
               />
+              <label
+                style={{
+                  display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 10,
+                  fontSize: 11, color: 'var(--text-muted)', cursor: 'pointer', lineHeight: 1.4,
+                }}
+                title="When ON, the full reserve sits on the cap table from day 1 (pre-issued). When OFF, only granted shares appear on the cap table — granting issues new shares."
+              >
+                <input
+                  type="checkbox"
+                  checked={employeesOnCapTablePreGrant}
+                  onChange={e => setEmployeesOnCapTablePreGrant(e.target.checked)}
+                  style={{ marginTop: 2, accentColor: 'var(--accent)' }}
+                />
+                <span>
+                  Reserve on cap table before grants
+                  <span style={{ display: 'block', color: 'var(--text-dim)', fontSize: 10, marginTop: 2 }}>
+                    {employeesOnCapTablePreGrant
+                      ? 'Full reserve pre-issued; grants transfer shares.'
+                      : 'Only granted shares on cap table; grants issue new shares.'}
+                  </span>
+                </span>
+              </label>
               {(() => {
                 const lastWithGrants = states[states.length - 1]
                 const grantedAbs = lastWithGrants && lastWithGrants.ownership[GRANTED_KEY]
