@@ -11,27 +11,31 @@ const DEFAULT_FOUNDERS = [
   { name: 'Founder 2', shares: 5000000 },
 ]
 
+const DEFAULT_RESERVE = 1000000
+
 const DEFAULT_ROUNDS = [
   {
-    id: 1, name: 'Seed', newShares: 1500000,
-    investment: 1500000, preMoneyVal: 8500000, optionPool: 500000
+    id: 1, name: 'Seed',
+    investment: 1500000, preMoneyVal: 8500000,
+    grantMode: 'shares', grantValue: 200000,
   },
   {
-    id: 2, name: 'Series A', newShares: 0,
-    investment: 10000000, preMoneyVal: 30000000, optionPool: 1000000
+    id: 2, name: 'Series A',
+    investment: 10000000, preMoneyVal: 30000000,
+    grantMode: 'shares', grantValue: 400000,
   },
 ]
 
 // Round templates ordered by typical timeline (earliest -> latest).
 // Investment / preMoneyVal are stored in raw dollars; UI displays them as $K.
 const ROUND_TEMPLATES = [
-  { name: 'Pre-Seed',    investment:    250000, preMoneyVal:   2000000, optionPool: 200000 },
-  { name: 'Angel',       investment:    500000, preMoneyVal:   4000000, optionPool: 250000 },
-  { name: 'Accelerator', investment:    125000, preMoneyVal:   1500000, optionPool: 100000 },
-  { name: 'Seed',        investment:   1500000, preMoneyVal:   8500000, optionPool: 500000 },
-  { name: 'Series A',    investment:  10000000, preMoneyVal:  30000000, optionPool: 1000000 },
-  { name: 'Series B',    investment:  25000000, preMoneyVal:  90000000, optionPool: 1500000 },
-  { name: 'Series C',    investment:  50000000, preMoneyVal: 200000000, optionPool: 2000000 },
+  { name: 'Pre-Seed',    investment:    250000, preMoneyVal:   2000000, grantMode: 'shares', grantValue: 100000 },
+  { name: 'Angel',       investment:    500000, preMoneyVal:   4000000, grantMode: 'shares', grantValue: 100000 },
+  { name: 'Accelerator', investment:    125000, preMoneyVal:   1500000, grantMode: 'shares', grantValue:  50000 },
+  { name: 'Seed',        investment:   1500000, preMoneyVal:   8500000, grantMode: 'shares', grantValue: 200000 },
+  { name: 'Series A',    investment:  10000000, preMoneyVal:  30000000, grantMode: 'shares', grantValue: 400000 },
+  { name: 'Series B',    investment:  25000000, preMoneyVal:  90000000, grantMode: 'shares', grantValue: 600000 },
+  { name: 'Series C',    investment:  50000000, preMoneyVal: 200000000, grantMode: 'shares', grantValue: 800000 },
 ]
 
 function fmt(n) {
@@ -46,45 +50,57 @@ function pct(n) {
   return `${(n * 100).toFixed(2)}%`
 }
 
-function computeRounds(founders, rounds) {
-  const founderTotal = founders.reduce((s, f) => s + (f.shares || 0), 0)
-  let states = []
-  let prevTotal = founderTotal
+const RESERVE_KEY = 'Employee Reserve (Unallocated)'
+const GRANTED_KEY = 'Employees (Granted)'
 
-  // Pre-funding state
+function computeRounds(founders, rounds, employeeReserve = 0) {
+  const founderTotal = founders.reduce((s, f) => s + (f.shares || 0), 0)
+  const reserveShares = Math.max(0, Math.round(employeeReserve || 0))
+  const preFundTotal = founderTotal + reserveShares
+  let states = []
+  let prevTotal = preFundTotal
+  let unallocatedReserve = reserveShares
+  let granted = 0
+
+  // Pre-funding state — founders + employee reserve already issued
   const preFund = {
     label: 'Pre-Funding',
-    totalShares: founderTotal,
+    totalShares: preFundTotal,
     ownership: {},
     postMoney: null,
     preMoney: null,
     newInvestors: 0,
-    optionPool: 0,
-    rounds: [],
+    roundIdx: -1,
   }
   founders.forEach(f => {
-    preFund.ownership[f.name] = f.shares / founderTotal
+    preFund.ownership[f.name] = preFundTotal > 0 ? f.shares / preFundTotal : 0
   })
+  if (reserveShares > 0) {
+    preFund.ownership[RESERVE_KEY] = reserveShares / preFundTotal
+  }
   states.push(preFund)
-
-  let cumulativeOptions = 0
-  let roundInvestorShares = {}
 
   rounds.forEach((round, idx) => {
     const preVal = round.preMoneyVal || 0
     const invest = round.investment || 0
     const postVal = preVal + invest
-    const optPool = round.optionPool || 0
 
-    // New shares issued: computed from pre-money price per share if not manual
-    // price per share = preMoney / prevTotal
     const pricePerShare = prevTotal > 0 ? preVal / prevTotal : 0
     const newInvestorShares = pricePerShare > 0 ? Math.round(invest / pricePerShare) : 0
-    const optionShares = optPool
-    const totalNew = newInvestorShares + optionShares
-    const newTotal = prevTotal + totalNew
+    const newTotal = prevTotal + newInvestorShares
 
-    cumulativeOptions += optionShares
+    // Resolve grant for this round (transfer from reserve -> granted, no new shares).
+    let grantShares = 0
+    if (round.grantMode === 'pct') {
+      // Grant X% of post-round total shares.
+      const pct = (round.grantValue || 0) / 100
+      grantShares = Math.round(pct * newTotal)
+    } else {
+      grantShares = Math.round(round.grantValue || 0)
+    }
+    grantShares = Math.max(0, Math.min(grantShares, unallocatedReserve))
+    unallocatedReserve -= grantShares
+    granted += grantShares
 
     const state = {
       label: round.name,
@@ -94,22 +110,19 @@ function computeRounds(founders, rounds) {
       pricePerShare,
       investment: invest,
       newInvestorShares,
-      optionShares,
+      grantShares,
       roundIdx: idx,
       ownership: {},
     }
 
-    // Track investor shares per round
-    roundInvestorShares[`Round ${idx + 1}: ${round.name}`] = newInvestorShares
-
-    // Calculate ownership for founders
+    // Founders dilute proportionally to total share growth.
     founders.forEach(f => {
       const prevState = states[states.length - 1]
       const founderShareCount = Math.round((prevState.ownership[f.name] || 0) * prevState.totalShares)
       state.ownership[f.name] = founderShareCount / newTotal
     })
 
-    // Investors from previous rounds
+    // Investors from previous rounds — keep their absolute shares, dilute by new total.
     states.forEach((s, si) => {
       if (si === 0) return
       const key = s.label
@@ -117,11 +130,14 @@ function computeRounds(founders, rounds) {
       state.ownership[key] = prevInvShares / newTotal
     })
 
-    // New investors this round
+    // New investors this round.
     state.ownership[round.name] = newInvestorShares / newTotal
 
-    // Option pool
-    state.ownership['Option Pool'] = cumulativeOptions / newTotal
+    // Reserve & granted are absolute share counts that diluted with new issuance.
+    if (reserveShares > 0) {
+      if (unallocatedReserve > 0) state.ownership[RESERVE_KEY] = unallocatedReserve / newTotal
+      if (granted > 0) state.ownership[GRANTED_KEY] = granted / newTotal
+    }
 
     prevTotal = newTotal
     states.push(state)
@@ -130,16 +146,36 @@ function computeRounds(founders, rounds) {
   return states
 }
 
-function RoundRow({ round, onUpdate, onRemove, index }) {
+function RoundRow({ round, onUpdate, onRemove, index, dragHandlers, isDragging, isDragOver }) {
   const update = (field, val) => onUpdate(index, field, val)
   return (
-    <div style={{
-      background: 'var(--bg-card)', border: '1px solid var(--border)',
-      borderRadius: 8, padding: '16px 20px', marginBottom: 12,
-      borderLeft: `3px solid ${ROUND_COLORS[index % ROUND_COLORS.length]}`
-    }}>
+    <div
+      onDragOver={dragHandlers.onDragOver}
+      onDrop={dragHandlers.onDrop}
+      onDragEnter={dragHandlers.onDragEnter}
+      onDragLeave={dragHandlers.onDragLeave}
+      style={{
+        background: 'var(--bg-card)', border: '1px solid var(--border)',
+        borderRadius: 8, padding: '16px 20px', marginBottom: 12,
+        borderLeft: `3px solid ${ROUND_COLORS[index % ROUND_COLORS.length]}`,
+        opacity: isDragging ? 0.4 : 1,
+        outline: isDragOver ? '2px dashed var(--accent)' : 'none',
+        outlineOffset: isDragOver ? -2 : 0,
+        transition: 'opacity 0.15s, outline 0.1s',
+      }}
+    >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span
+            draggable
+            onDragStart={dragHandlers.onDragStart}
+            onDragEnd={dragHandlers.onDragEnd}
+            title="Drag to reorder"
+            style={{
+              cursor: 'grab', color: 'var(--text-dim)', fontSize: 14, lineHeight: 1,
+              userSelect: 'none', padding: '0 2px',
+            }}
+          >⋮⋮</span>
           <span style={{ color: ROUND_COLORS[index % ROUND_COLORS.length], fontFamily: 'Syne', fontWeight: 700, fontSize: 12, letterSpacing: '0.08em', textTransform: 'uppercase' }}>
             Round {index + 1}
           </span>
@@ -155,7 +191,7 @@ function RoundRow({ round, onUpdate, onRemove, index }) {
           style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 18, lineHeight: 1, padding: '0 4px' }}
         >×</button>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 10 }}>
         <div>
           <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Pre-Money Val ($K)</label>
           <div style={{ position: 'relative' }}>
@@ -170,9 +206,33 @@ function RoundRow({ round, onUpdate, onRemove, index }) {
             <input type="number" value={round.investment / 1000} onChange={e => update('investment', (+e.target.value) * 1000)} style={{ paddingLeft: 22 }} />
           </div>
         </div>
-        <div>
-          <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Option Pool (shares)</label>
-          <input type="number" value={round.optionPool} onChange={e => update('optionPool', +e.target.value)} />
+      </div>
+      <div>
+        <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+          Employee Grant (this round)
+        </label>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <div style={{ display: 'flex', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+            {['shares', 'pct'].map(m => (
+              <button
+                key={m}
+                onClick={() => update('grantMode', m)}
+                style={{
+                  background: round.grantMode === m ? 'var(--accent-dim)' : 'transparent',
+                  color: round.grantMode === m ? 'var(--accent)' : 'var(--text-muted)',
+                  border: 'none', fontFamily: 'DM Mono', fontSize: 10,
+                  padding: '0 10px', cursor: 'pointer', letterSpacing: '0.05em',
+                }}
+              >{m === 'shares' ? '#' : '%'}</button>
+            ))}
+          </div>
+          <input
+            type="number"
+            value={round.grantValue ?? 0}
+            onChange={e => update('grantValue', +e.target.value)}
+            style={{ flex: 1 }}
+            placeholder={round.grantMode === 'pct' ? '% of total' : 'shares'}
+          />
         </div>
       </div>
     </div>
@@ -250,10 +310,11 @@ const CustomTooltip = ({ active, payload, label }) => {
 
 export default function App() {
   const [founders, setFounders] = useState(DEFAULT_FOUNDERS)
+  const [employeeReserve, setEmployeeReserve] = useState(DEFAULT_RESERVE)
   const [rounds, setRounds] = useState(DEFAULT_ROUNDS)
   const [activeTab, setActiveTab] = useState('chart')
 
-  const states = useMemo(() => computeRounds(founders, rounds), [founders, rounds])
+  const states = useMemo(() => computeRounds(founders, rounds, employeeReserve), [founders, rounds, employeeReserve])
 
   const chartData = states.map(state => {
     const row = { name: state.label }
@@ -274,14 +335,16 @@ export default function App() {
       name: 'Custom',
       investment: 20000000,
       preMoneyVal: ((rounds[rounds.length - 1]?.preMoneyVal) || 10000000) * 3,
-      optionPool: 500000,
+      grantMode: 'shares',
+      grantValue: 0,
     }
     setRounds([...rounds, {
       id: Date.now(),
       name: t.name,
       investment: t.investment,
       preMoneyVal: t.preMoneyVal,
-      optionPool: t.optionPool,
+      grantMode: t.grantMode || 'shares',
+      grantValue: t.grantValue ?? 0,
     }])
   }
 
@@ -290,6 +353,38 @@ export default function App() {
   }
 
   const removeRound = (idx) => setRounds(rounds.filter((_, i) => i !== idx))
+
+  const [dragIdx, setDragIdx] = useState(null)
+  const [dragOverIdx, setDragOverIdx] = useState(null)
+
+  const reorderRounds = (from, to) => {
+    if (from === to || from == null || to == null) return
+    const next = rounds.slice()
+    const [moved] = next.splice(from, 1)
+    next.splice(to, 0, moved)
+    setRounds(next)
+  }
+
+  const makeDragHandlers = (idx) => ({
+    onDragStart: (e) => {
+      setDragIdx(idx)
+      e.dataTransfer.effectAllowed = 'move'
+      try { e.dataTransfer.setData('text/plain', String(idx)) } catch {}
+    },
+    onDragEnd: () => { setDragIdx(null); setDragOverIdx(null) },
+    onDragOver: (e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move' },
+    onDragEnter: () => { if (dragIdx !== null && dragIdx !== idx) setDragOverIdx(idx) },
+    onDragLeave: (e) => {
+      // only clear if leaving the row (not entering a child)
+      if (e.currentTarget.contains(e.relatedTarget)) return
+      setDragOverIdx(curr => curr === idx ? null : curr)
+    },
+    onDrop: (e) => {
+      e.preventDefault()
+      if (dragIdx !== null) reorderRounds(dragIdx, idx)
+      setDragIdx(null); setDragOverIdx(null)
+    },
+  })
 
   const addFounder = () => setFounders([...founders, { name: `Founder ${founders.length + 1}`, shares: 1000000 }])
   const updateFounder = (idx, field, val) => setFounders(founders.map((f, i) => i === idx ? { ...f, [field]: val } : f))
@@ -361,6 +456,42 @@ export default function App() {
             ))}
           </div>
 
+          {/* Employee Reserve */}
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ marginBottom: 14 }}>
+              <span style={{ fontFamily: 'Syne', fontWeight: 700, fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                Employee Reserve
+              </span>
+            </div>
+            <div style={{
+              background: 'var(--bg-card)', border: '1px solid var(--border)',
+              borderRadius: 6, padding: '10px 12px',
+            }}>
+              <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                Reserved Shares (pre-funding)
+              </label>
+              <input
+                type="number"
+                value={employeeReserve}
+                onChange={e => setEmployeeReserve(Math.max(0, +e.target.value))}
+                placeholder="0"
+              />
+              {(() => {
+                const lastWithGrants = states[states.length - 1]
+                const grantedAbs = lastWithGrants && lastWithGrants.ownership[GRANTED_KEY]
+                  ? Math.round(lastWithGrants.ownership[GRANTED_KEY] * lastWithGrants.totalShares)
+                  : 0
+                const remaining = Math.max(0, employeeReserve - grantedAbs)
+                return employeeReserve > 0 ? (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 11, color: 'var(--text-muted)', fontFamily: 'DM Mono' }}>
+                    <span>Granted: <span style={{ color: 'var(--text)' }}>{grantedAbs.toLocaleString()}</span></span>
+                    <span>Remaining: <span style={{ color: 'var(--text)' }}>{remaining.toLocaleString()}</span></span>
+                  </div>
+                ) : null
+              })()}
+            </div>
+          </div>
+
           {/* Rounds */}
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
@@ -370,7 +501,16 @@ export default function App() {
               <AddRoundDropdown onAdd={addRound} />
             </div>
             {rounds.map((r, idx) => (
-              <RoundRow key={r.id} round={r} index={idx} onUpdate={updateRound} onRemove={removeRound} />
+              <RoundRow
+                key={r.id}
+                round={r}
+                index={idx}
+                onUpdate={updateRound}
+                onRemove={removeRound}
+                dragHandlers={makeDragHandlers(idx)}
+                isDragging={dragIdx === idx}
+                isDragOver={dragOverIdx === idx && dragIdx !== idx}
+              />
             ))}
           </div>
         </div>
