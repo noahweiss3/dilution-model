@@ -94,9 +94,9 @@ function computeRounds(founders, rounds, employeeReserve = 0) {
     // Resolve grant for this round (transfer from reserve -> granted, no new shares).
     let grantShares = 0
     if (round.grantMode === 'pct') {
-      // Grant X% of post-round total shares.
+      // Grant X% of TOTAL employee reserve (not round size, not remaining).
       const pct = (round.grantValue || 0) / 100
-      grantShares = Math.round(pct * newTotal)
+      grantShares = Math.round(pct * reserveShares)
     } else {
       grantShares = Math.round(round.grantValue || 0)
     }
@@ -262,7 +262,7 @@ function RoundRow({ round, onUpdate, onRemove, index, dragHandlers, isDragging, 
             value={round.grantValue ?? 0}
             onChange={e => update('grantValue', +e.target.value)}
             style={{ flex: 1 }}
-            placeholder={round.grantMode === 'pct' ? '% of total' : 'shares'}
+            placeholder={round.grantMode === 'pct' ? '% of reserve' : 'shares'}
           />
         </div>
       </div>
@@ -321,18 +321,26 @@ function AddRoundDropdown({ onAdd }) {
   )
 }
 
-const CustomTooltip = ({ active, payload, label }) => {
+const CustomTooltip = ({ active, payload, label, mode }) => {
   if (!active || !payload || !payload.length) return null
+  const fmtVal = (v) => {
+    if (mode === 'shares') {
+      if (v >= 1e6) return `${(v / 1e6).toFixed(2)}M`
+      if (v >= 1e3) return `${(v / 1e3).toFixed(1)}K`
+      return Math.round(v).toLocaleString()
+    }
+    return `${v.toFixed(2)}%`
+  }
   return (
     <div style={{
       background: '#14141f', border: '1px solid var(--border-accent)',
-      borderRadius: 6, padding: '10px 14px', fontSize: 12
+      borderRadius: 6, padding: '10px 14px', fontSize: 12, color: '#e8e8f0',
     }}>
       <div style={{ color: 'var(--text-muted)', marginBottom: 6, fontFamily: 'Syne', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10 }}>{label}</div>
       {payload.slice().reverse().map((p, i) => (
-        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 20, color: p.color }}>
+        <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 20 }}>
           <span style={{ color: 'var(--text-muted)' }}>{p.name}</span>
-          <span style={{ fontWeight: 500 }}>{pct(p.value / 100)}</span>
+          <span style={{ fontWeight: 500, color: '#e8e8f0' }}>{fmtVal(p.value)}</span>
         </div>
       ))}
     </div>
@@ -344,16 +352,28 @@ export default function App() {
   const [employeeReserve, setEmployeeReserve] = useState(DEFAULT_RESERVE)
   const [rounds, setRounds] = useState(DEFAULT_ROUNDS)
   const [activeTab, setActiveTab] = useState('chart')
+  const [valueMode, setValueMode] = useState('pct') // 'pct' | 'shares'
 
   const states = useMemo(() => computeRounds(founders, rounds, employeeReserve), [founders, rounds, employeeReserve])
 
   const chartData = states.map(state => {
-    const row = { name: state.label }
+    const row = { name: state.label, _total: state.totalShares }
     Object.entries(state.ownership).forEach(([k, v]) => {
-      row[k] = +(v * 100).toFixed(3)
+      if (valueMode === 'shares') {
+        row[k] = Math.round(v * state.totalShares)
+      } else {
+        row[k] = +(v * 100).toFixed(3)
+      }
     })
     return row
   })
+
+  const fmtShares = (n) => {
+    if (n == null || isNaN(n)) return '—'
+    if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`
+    if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`
+    return n.toLocaleString()
+  }
 
   const allKeys = useMemo(() => {
     const keys = new Set()
@@ -423,7 +443,55 @@ export default function App() {
   const updateFounder = (idx, field, val) => setFounders(founders.map((f, i) => i === idx ? { ...f, [field]: val } : f))
   const removeFounder = (idx) => setFounders(founders.filter((_, i) => i !== idx))
 
+  const equalizeFounders = () => {
+    if (founders.length === 0) return
+    const total = founders.reduce((s, f) => s + (f.shares || 0), 0)
+    const each = Math.round((total || founders.length * 1000000) / founders.length)
+    setFounders(founders.map(f => ({ ...f, shares: each })))
+  }
+
+  // Edit a founder's % directly. Holds total founder shares constant; redistributes
+  // the difference proportionally across the OTHER founders so percentages sum to 100%.
+  const updateFounderPct = (idx, newPct) => {
+    if (founders.length < 2) return
+    const total = founders.reduce((s, f) => s + (f.shares || 0), 0)
+    if (!total) return
+    const clamped = Math.max(0, Math.min(99.99, newPct))
+    const targetShares = Math.round((clamped / 100) * total)
+    const otherTotal = total - (founders[idx].shares || 0)
+    const remainingForOthers = total - targetShares
+    setFounders(founders.map((f, i) => {
+      if (i === idx) return { ...f, shares: targetShares }
+      if (otherTotal === 0) {
+        // edge case: everyone else has 0 — distribute equally among others
+        return { ...f, shares: Math.round(remainingForOthers / (founders.length - 1)) }
+      }
+      const ratio = (f.shares || 0) / otherTotal
+      return { ...f, shares: Math.round(ratio * remainingForOthers) }
+    }))
+  }
+
   const lastState = states[states.length - 1]
+
+  const [leftWidth, setLeftWidth] = useState(380)
+  const splitterDragging = useRef(false)
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!splitterDragging.current) return
+      const w = Math.max(280, Math.min(720, e.clientX))
+      setLeftWidth(w)
+    }
+    const onUp = () => {
+      if (splitterDragging.current) {
+        splitterDragging.current = false
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+      }
+    }
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp) }
+  }, [])
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)' }}>
@@ -444,49 +512,76 @@ export default function App() {
         </span>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '380px 1fr', minHeight: 'calc(100vh - 69px)' }}>
+      <div style={{ display: 'flex', minHeight: 'calc(100vh - 69px)' }}>
         {/* Left Panel */}
-        <div style={{ borderRight: '1px solid var(--border)', padding: '24px 20px', overflowY: 'auto', maxHeight: 'calc(100vh - 69px)' }}>
+        <div style={{ width: leftWidth, flexShrink: 0, padding: '24px 20px', overflowY: 'auto', maxHeight: 'calc(100vh - 69px)' }}>
 
           {/* Founders */}
           <div style={{ marginBottom: 28 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 8 }}>
               <span style={{ fontFamily: 'Syne', fontWeight: 700, fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
                 Founders & Cap Table
               </span>
-              <button
-                onClick={addFounder}
-                style={{
-                  background: 'var(--accent-dim)', border: '1px solid var(--accent)',
-                  color: 'var(--accent)', fontSize: 11, borderRadius: 4,
-                  padding: '3px 10px', letterSpacing: '0.05em',
-                  fontFamily: 'DM Mono',
-                }}
-              >+ ADD</button>
-            </div>
-            {founders.map((f, idx) => (
-              <div key={idx} style={{
-                display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center',
-                background: 'var(--bg-card)', border: '1px solid var(--border)',
-                borderRadius: 6, padding: '8px 12px',
-              }}>
-                <input
-                  type="text" value={f.name}
-                  onChange={e => updateFounder(idx, 'name', e.target.value)}
-                  style={{ flex: 1, background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-accent)', borderRadius: 0, padding: '2px 0', fontFamily: 'Syne', fontWeight: 600 }}
-                />
-                <input
-                  type="number" value={f.shares}
-                  onChange={e => updateFounder(idx, 'shares', +e.target.value)}
-                  style={{ width: 110, textAlign: 'right', fontSize: 12 }}
-                  placeholder="Shares"
-                />
-                <span style={{ color: 'var(--text-muted)', fontSize: 11, minWidth: 44, textAlign: 'right' }}>
-                  {pct(f.shares / founders.reduce((s, x) => s + x.shares, 0))}
-                </span>
-                <button onClick={() => removeFounder(idx)} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: 16 }}>×</button>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <button
+                  onClick={equalizeFounders}
+                  disabled={founders.length < 2}
+                  title="Distribute total founder shares evenly"
+                  style={{
+                    background: 'transparent', border: '1px solid var(--border-accent)',
+                    color: 'var(--text-muted)', fontSize: 11, borderRadius: 4,
+                    padding: '3px 10px', letterSpacing: '0.05em',
+                    fontFamily: 'DM Mono', cursor: founders.length < 2 ? 'not-allowed' : 'pointer',
+                    opacity: founders.length < 2 ? 0.4 : 1,
+                  }}
+                >EQUALIZE</button>
+                <button
+                  onClick={addFounder}
+                  style={{
+                    background: 'var(--accent-dim)', border: '1px solid var(--accent)',
+                    color: 'var(--accent)', fontSize: 11, borderRadius: 4,
+                    padding: '3px 10px', letterSpacing: '0.05em',
+                    fontFamily: 'DM Mono', cursor: 'pointer',
+                  }}
+                >+ ADD</button>
               </div>
-            ))}
+            </div>
+            {founders.map((f, idx) => {
+              const totalFounderShares = founders.reduce((s, x) => s + (x.shares || 0), 0) || 1
+              const founderPct = ((f.shares || 0) / totalFounderShares) * 100
+              return (
+                <div key={idx} style={{
+                  display: 'flex', gap: 8, marginBottom: 8, alignItems: 'center',
+                  background: 'var(--bg-card)', border: '1px solid var(--border)',
+                  borderRadius: 6, padding: '8px 12px',
+                }}>
+                  <input
+                    type="text" value={f.name}
+                    onChange={e => updateFounder(idx, 'name', e.target.value)}
+                    style={{ flex: 1, background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-accent)', borderRadius: 0, padding: '2px 0', fontFamily: 'Syne', fontWeight: 600 }}
+                  />
+                  <input
+                    type="number" value={f.shares}
+                    onChange={e => updateFounder(idx, 'shares', +e.target.value)}
+                    style={{ width: 100, textAlign: 'right', fontSize: 12 }}
+                    placeholder="Shares"
+                  />
+                  <div style={{ position: 'relative', width: 64 }}>
+                    <input
+                      type="number"
+                      step={0.1}
+                      value={+founderPct.toFixed(2)}
+                      onChange={e => updateFounderPct(idx, +e.target.value)}
+                      disabled={founders.length < 2}
+                      title={founders.length < 2 ? 'Add another founder to edit %' : 'Edit % — redistributes among other founders'}
+                      style={{ width: '100%', textAlign: 'right', fontSize: 12, paddingRight: 16 }}
+                    />
+                    <span style={{ position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: 11, pointerEvents: 'none' }}>%</span>
+                  </div>
+                  <button onClick={() => removeFounder(idx)} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: 16, cursor: 'pointer' }}>×</button>
+                </div>
+              )
+            })}
           </div>
 
           {/* Employee Reserve */}
@@ -548,8 +643,26 @@ export default function App() {
           </div>
         </div>
 
+        {/* Splitter */}
+        <div
+          onMouseDown={() => {
+            splitterDragging.current = true
+            document.body.style.cursor = 'col-resize'
+            document.body.style.userSelect = 'none'
+          }}
+          onDoubleClick={() => setLeftWidth(380)}
+          title="Drag to resize • Double-click to reset"
+          style={{
+            width: 6, flexShrink: 0, cursor: 'col-resize',
+            background: 'var(--border)', position: 'relative',
+            transition: 'background 0.15s',
+          }}
+          onMouseEnter={e => e.currentTarget.style.background = 'var(--accent)'}
+          onMouseLeave={e => e.currentTarget.style.background = 'var(--border)'}
+        />
+
         {/* Right Panel */}
-        <div style={{ padding: '24px 28px', overflowY: 'auto', maxHeight: 'calc(100vh - 69px)' }}>
+        <div style={{ flex: 1, minWidth: 0, padding: '24px 28px', overflowY: 'auto', maxHeight: 'calc(100vh - 69px)' }}>
 
           {/* Stats Row */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 12, marginBottom: 28 }}>
@@ -570,7 +683,7 @@ export default function App() {
           </div>
 
           {/* Tabs */}
-          <div style={{ display: 'flex', gap: 0, marginBottom: 20, borderBottom: '1px solid var(--border)' }}>
+          <div style={{ display: 'flex', gap: 0, marginBottom: 20, borderBottom: '1px solid var(--border)', alignItems: 'flex-end' }}>
             {['chart', 'table', 'waterfall'].map(tab => (
               <button
                 key={tab}
@@ -584,20 +697,41 @@ export default function App() {
                 }}
               >{tab}</button>
             ))}
+            {activeTab !== 'waterfall' && (
+              <div style={{ marginLeft: 'auto', marginBottom: 4 }}>
+                <div style={{ display: 'inline-flex', background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+                  {[
+                    { id: 'pct', label: '% EQUITY' },
+                    { id: 'shares', label: '# SHARES' },
+                  ].map(o => (
+                    <button
+                      key={o.id}
+                      onClick={() => setValueMode(o.id)}
+                      style={{
+                        background: valueMode === o.id ? 'var(--accent-dim)' : 'transparent',
+                        color: valueMode === o.id ? 'var(--accent)' : 'var(--text-muted)',
+                        border: 'none', fontFamily: 'DM Mono', fontSize: 10,
+                        padding: '4px 10px', cursor: 'pointer', letterSpacing: '0.05em',
+                      }}
+                    >{o.label}</button>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Chart */}
           {activeTab === 'chart' && (
             <div>
               <div style={{ color: 'var(--text-muted)', fontSize: 11, marginBottom: 16, letterSpacing: '0.04em' }}>
-                Ownership % by stakeholder across funding rounds
+                {valueMode === 'shares' ? 'Shares held' : 'Ownership %'} by stakeholder across funding rounds
               </div>
               <ResponsiveContainer width="100%" height={320}>
                 <AreaChart data={chartData} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                   <XAxis dataKey="name" tick={{ fill: 'var(--text-muted)', fontSize: 11, fontFamily: 'DM Mono' }} axisLine={{ stroke: 'var(--border)' }} tickLine={false} />
-                  <YAxis tickFormatter={v => `${v}%`} tick={{ fill: 'var(--text-muted)', fontSize: 11, fontFamily: 'DM Mono' }} axisLine={false} tickLine={false} />
-                  <Tooltip content={<CustomTooltip />} />
+                  <YAxis tickFormatter={v => valueMode === 'shares' ? fmtShares(v) : `${v}%`} tick={{ fill: 'var(--text-muted)', fontSize: 11, fontFamily: 'DM Mono' }} axisLine={false} tickLine={false} width={valueMode === 'shares' ? 60 : 40} />
+                  <Tooltip content={<CustomTooltip mode={valueMode} />} />
                   {allKeys.map((key, i) => (
                     <Area
                       key={key} type="monotone" dataKey={key}
@@ -646,16 +780,29 @@ export default function App() {
                         const val = s.ownership[key]
                         const prev = si > 0 ? states[si - 1].ownership[key] : null
                         const delta = prev !== undefined && prev !== null && val !== undefined ? val - prev : null
+                        const showShares = valueMode === 'shares'
+                        const sharesAbs = val !== undefined ? Math.round(val * s.totalShares) : null
+                        const prevSharesAbs = prev !== undefined && prev !== null ? Math.round(prev * states[si - 1].totalShares) : null
+                        const sharesDelta = sharesAbs !== null && prevSharesAbs !== null ? sharesAbs - prevSharesAbs : null
                         return (
                           <td key={si} style={{ textAlign: 'right', padding: '9px 12px', fontFamily: 'DM Mono' }}>
                             {val !== undefined ? (
                               <div>
-                                <span style={{ color: 'var(--text)' }}>{pct(val)}</span>
-                                {delta !== null && delta !== 0 && (
-                                  <span style={{ fontSize: 10, color: delta < 0 ? 'var(--red)' : 'var(--green)', marginLeft: 6 }}>
-                                    {delta > 0 ? '+' : ''}{pct(delta)}
-                                  </span>
-                                )}
+                                <span style={{ color: 'var(--text)' }}>
+                                  {showShares ? fmtShares(sharesAbs) : pct(val)}
+                                </span>
+                                {showShares
+                                  ? (sharesDelta !== null && sharesDelta !== 0 && (
+                                      <span style={{ fontSize: 10, color: sharesDelta < 0 ? 'var(--red)' : 'var(--green)', marginLeft: 6 }}>
+                                        {sharesDelta > 0 ? '+' : ''}{fmtShares(Math.abs(sharesDelta)).replace(/^/, sharesDelta < 0 ? '-' : '')}
+                                      </span>
+                                    ))
+                                  : (delta !== null && delta !== 0 && (
+                                      <span style={{ fontSize: 10, color: delta < 0 ? 'var(--red)' : 'var(--green)', marginLeft: 6 }}>
+                                        {delta > 0 ? '+' : ''}{pct(delta)}
+                                      </span>
+                                    ))
+                                }
                               </div>
                             ) : <span style={{ color: 'var(--text-dim)' }}>—</span>}
                           </td>
@@ -696,7 +843,13 @@ export default function App() {
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
                   <XAxis dataKey="label" tick={{ fill: 'var(--text-muted)', fontSize: 11, fontFamily: 'DM Mono' }} axisLine={false} tickLine={false} />
                   <YAxis tickFormatter={v => `$${(v / 1e6).toFixed(0)}M`} tick={{ fill: 'var(--text-muted)', fontSize: 11, fontFamily: 'DM Mono' }} axisLine={false} tickLine={false} />
-                  <Tooltip formatter={(v) => fmt(v)} contentStyle={{ background: '#14141f', border: '1px solid var(--border-accent)', borderRadius: 6, fontFamily: 'DM Mono', fontSize: 12 }} />
+                  <Tooltip
+                    formatter={(v) => fmt(v)}
+                    cursor={{ fill: 'rgba(124,108,252,0.08)' }}
+                    contentStyle={{ background: '#14141f', border: '1px solid var(--border-accent)', borderRadius: 6, fontFamily: 'DM Mono', fontSize: 12, color: '#e8e8f0' }}
+                    labelStyle={{ color: '#a4a4b8', fontFamily: 'Syne', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10, marginBottom: 4 }}
+                    itemStyle={{ color: '#e8e8f0' }}
+                  />
                   <Bar dataKey="preMoney" name="Pre-Money" radius={[3, 3, 0, 0]}>
                     {states.slice(1).map((_, i) => (
                       <Cell key={i} fill={ROUND_COLORS[i % ROUND_COLORS.length]} fillOpacity={0.7} />
