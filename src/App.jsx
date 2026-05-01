@@ -16,27 +16,29 @@ const DEFAULT_RESERVE = 1000000
 const DEFAULT_ROUNDS = [
   {
     id: 1, name: 'Seed',
-    investment: 1500000, preMoneyVal: 8500000,
+    investment: 1500000, preMoneyVal: 8500000, unit: 'K',
     grantMode: 'shares', grantValue: 200000,
   },
   {
     id: 2, name: 'Series A',
-    investment: 10000000, preMoneyVal: 30000000,
+    investment: 10000000, preMoneyVal: 30000000, unit: 'M',
     grantMode: 'shares', grantValue: 400000,
   },
 ]
 
 // Round templates ordered by typical timeline (earliest -> latest).
-// Investment / preMoneyVal are stored in raw dollars; UI displays them as $K.
+// Investment / preMoneyVal stored in raw dollars; UI shows them in the round's chosen `unit` ($K or $M).
 const ROUND_TEMPLATES = [
-  { name: 'Pre-Seed',    investment:    250000, preMoneyVal:   2000000, grantMode: 'shares', grantValue: 100000 },
-  { name: 'Angel',       investment:    500000, preMoneyVal:   4000000, grantMode: 'shares', grantValue: 100000 },
-  { name: 'Accelerator', investment:    125000, preMoneyVal:   1500000, grantMode: 'shares', grantValue:  50000 },
-  { name: 'Seed',        investment:   1500000, preMoneyVal:   8500000, grantMode: 'shares', grantValue: 200000 },
-  { name: 'Series A',    investment:  10000000, preMoneyVal:  30000000, grantMode: 'shares', grantValue: 400000 },
-  { name: 'Series B',    investment:  25000000, preMoneyVal:  90000000, grantMode: 'shares', grantValue: 600000 },
-  { name: 'Series C',    investment:  50000000, preMoneyVal: 200000000, grantMode: 'shares', grantValue: 800000 },
+  { name: 'Pre-Seed',    investment:    250000, preMoneyVal:   2000000, unit: 'K', grantMode: 'shares', grantValue: 100000 },
+  { name: 'Angel',       investment:    500000, preMoneyVal:   4000000, unit: 'K', grantMode: 'shares', grantValue: 100000 },
+  { name: 'Accelerator', investment:    125000, preMoneyVal:   1500000, unit: 'K', grantMode: 'shares', grantValue:  50000 },
+  { name: 'Seed',        investment:   1500000, preMoneyVal:   8500000, unit: 'K', grantMode: 'shares', grantValue: 200000 },
+  { name: 'Series A',    investment:  10000000, preMoneyVal:  30000000, unit: 'M', grantMode: 'shares', grantValue: 400000 },
+  { name: 'Series B',    investment:  25000000, preMoneyVal:  90000000, unit: 'M', grantMode: 'shares', grantValue: 600000 },
+  { name: 'Series C',    investment:  50000000, preMoneyVal: 200000000, unit: 'M', grantMode: 'shares', grantValue: 800000 },
 ]
+
+const UNIT_DIVISOR = { K: 1000, M: 1000000 }
 
 function fmt(n) {
   if (!n && n !== 0) return '—'
@@ -191,22 +193,51 @@ function RoundRow({ round, onUpdate, onRemove, index, dragHandlers, isDragging, 
           style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: 18, lineHeight: 1, padding: '0 4px' }}
         >×</button>
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 10 }}>
-        <div>
-          <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Pre-Money Val ($K)</label>
-          <div style={{ position: 'relative' }}>
-            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>$</span>
-            <input type="number" value={round.preMoneyVal / 1000} onChange={e => update('preMoneyVal', (+e.target.value) * 1000)} style={{ paddingLeft: 22 }} />
-          </div>
-        </div>
-        <div>
-          <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Investment ($K)</label>
-          <div style={{ position: 'relative' }}>
-            <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>$</span>
-            <input type="number" value={round.investment / 1000} onChange={e => update('investment', (+e.target.value) * 1000)} style={{ paddingLeft: 22 }} />
-          </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 6 }}>
+        <div style={{ display: 'flex', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 4, overflow: 'hidden' }}>
+          {['K', 'M'].map(u => (
+            <button
+              key={u}
+              onClick={() => update('unit', u)}
+              title={`Display \$ inputs in ${u === 'K' ? 'thousands' : 'millions'}`}
+              style={{
+                background: (round.unit || 'K') === u ? 'var(--accent-dim)' : 'transparent',
+                color: (round.unit || 'K') === u ? 'var(--accent)' : 'var(--text-muted)',
+                border: 'none', fontFamily: 'DM Mono', fontSize: 10,
+                padding: '2px 9px', cursor: 'pointer', letterSpacing: '0.05em',
+              }}
+            >${u}</button>
+          ))}
         </div>
       </div>
+      {(() => {
+        const unit = round.unit || 'K'
+        const div = UNIT_DIVISOR[unit]
+        const fromInput = (v) => (+v) * div
+        const toDisplay = (raw) => {
+          const d = (raw || 0) / div
+          // Trim trailing zeros for M so '8.5' shows instead of '8.500000'.
+          return unit === 'M' ? +d.toFixed(6) : d
+        }
+        return (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 10 }}>
+            <div>
+              <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Pre-Money Val (${unit})</label>
+              <div style={{ position: 'relative' }}>
+                <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>$</span>
+                <input type="number" step={unit === 'M' ? 0.1 : 1} value={toDisplay(round.preMoneyVal)} onChange={e => update('preMoneyVal', fromInput(e.target.value))} style={{ paddingLeft: 22 }} />
+              </div>
+            </div>
+            <div>
+              <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Investment (${unit})</label>
+              <div style={{ position: 'relative' }}>
+                <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>$</span>
+                <input type="number" step={unit === 'M' ? 0.1 : 1} value={toDisplay(round.investment)} onChange={e => update('investment', fromInput(e.target.value))} style={{ paddingLeft: 22 }} />
+              </div>
+            </div>
+          </div>
+        )
+      })()}
       <div>
         <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
           Employee Grant (this round)
@@ -335,6 +366,7 @@ export default function App() {
       name: 'Custom',
       investment: 20000000,
       preMoneyVal: ((rounds[rounds.length - 1]?.preMoneyVal) || 10000000) * 3,
+      unit: rounds[rounds.length - 1]?.unit || 'M',
       grantMode: 'shares',
       grantValue: 0,
     }
@@ -343,6 +375,7 @@ export default function App() {
       name: t.name,
       investment: t.investment,
       preMoneyVal: t.preMoneyVal,
+      unit: t.unit || 'K',
       grantMode: t.grantMode || 'shares',
       grantValue: t.grantValue ?? 0,
     }])
