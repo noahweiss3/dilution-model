@@ -11,32 +11,32 @@ const DEFAULT_FOUNDERS = [
   { name: 'Founder 2', shares: 5000000 },
 ]
 
-const DEFAULT_RESERVE = 1000000
+const DEFAULT_RESERVE = 2500000
 
 const DEFAULT_ROUNDS = [
   {
     id: 1, name: 'Seed',
     investment: 1500000, preMoneyVal: 8500000, unit: 'K',
-    grantMode: 'shares', grantValue: 200000,
+    grantMode: 'shares', grantValue: 0,
   },
   {
     id: 2, name: 'Series A',
     investment: 10000000, preMoneyVal: 30000000, unit: 'M',
-    grantMode: 'shares', grantValue: 400000,
+    grantMode: 'shares', grantValue: 0,
   },
 ]
 
 // Round templates ordered by typical timeline (earliest -> latest).
 // Investment / preMoneyVal stored in raw dollars; UI shows them in the round's chosen `unit` ($K or $M).
 const ROUND_TEMPLATES = [
-  { name: 'Angel',       investment:    100000, preMoneyVal:   1500000, unit: 'K', grantMode: 'shares', grantValue:  50000 },
-  { name: 'Accelerator', investment:    125000, preMoneyVal:   1500000, unit: 'K', grantMode: 'shares', grantValue:  50000 },
-  { name: 'Pre-Seed',    investment:    500000, preMoneyVal:   4000000, unit: 'K', grantMode: 'shares', grantValue: 100000 },
-  { name: 'Seed',        investment:   1500000, preMoneyVal:   8500000, unit: 'K', grantMode: 'shares', grantValue: 200000 },
-  { name: 'Series A',    investment:  10000000, preMoneyVal:  30000000, unit: 'M', grantMode: 'shares', grantValue: 400000 },
-  { name: 'Series B',    investment:  25000000, preMoneyVal:  90000000, unit: 'M', grantMode: 'shares', grantValue: 600000 },
-  { name: 'Series C',    investment:  50000000, preMoneyVal: 200000000, unit: 'M', grantMode: 'shares', grantValue: 800000 },
-  { name: 'Series D',    investment: 100000000, preMoneyVal: 500000000, unit: 'M', grantMode: 'shares', grantValue: 1000000 },
+  { name: 'Angel',       investment:    100000, preMoneyVal:   1500000, unit: 'K', grantMode: 'shares', grantValue: 0 },
+  { name: 'Accelerator', investment:    125000, preMoneyVal:   1500000, unit: 'K', grantMode: 'shares', grantValue: 0 },
+  { name: 'Pre-Seed',    investment:    500000, preMoneyVal:   4000000, unit: 'K', grantMode: 'shares', grantValue: 0 },
+  { name: 'Seed',        investment:   1500000, preMoneyVal:   8500000, unit: 'K', grantMode: 'shares', grantValue: 0 },
+  { name: 'Series A',    investment:  10000000, preMoneyVal:  30000000, unit: 'M', grantMode: 'shares', grantValue: 0 },
+  { name: 'Series B',    investment:  25000000, preMoneyVal:  90000000, unit: 'M', grantMode: 'shares', grantValue: 0 },
+  { name: 'Series C',    investment:  50000000, preMoneyVal: 200000000, unit: 'M', grantMode: 'shares', grantValue: 0 },
+  { name: 'Series D',    investment: 100000000, preMoneyVal: 500000000, unit: 'M', grantMode: 'shares', grantValue: 0 },
 ]
 
 // Sort key: position in ROUND_TEMPLATES (earlier index = earlier round). Custom and unknowns go last (preserved relative order).
@@ -44,6 +44,63 @@ const ROUND_ORDER = Object.fromEntries(ROUND_TEMPLATES.map((t, i) => [t.name, i]
 const sortKeyFor = (name) => ROUND_ORDER[name] ?? Number.MAX_SAFE_INTEGER
 
 const UNIT_DIVISOR = { K: 1000, M: 1000000 }
+
+function formatWithCommas(n, decimals = 0) {
+  if (n == null || n === '' || isNaN(n)) return ''
+  const num = +n
+  if (decimals > 0) {
+    // Preserve up to `decimals` decimals; trim trailing zeros only if integer.
+    const fixed = num.toFixed(decimals)
+    const [intPart, decPart] = fixed.split('.')
+    return intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (decPart ? '.' + decPart : '')
+  }
+  return Math.round(num).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+}
+
+// Comma-formatted number input. Shows formatted value when blurred,
+// raw editable value when focused. `decimals` lets $M inputs keep 1 decimal.
+function NumberInput({ value, onChange, decimals = 0, allowDecimal = false, style, ...rest }) {
+  const [focused, setFocused] = useState(false)
+  const [draft, setDraft] = useState('')
+  const display = focused
+    ? draft
+    : (value == null || value === '' ? '' : formatWithCommas(value, decimals))
+  return (
+    <input
+      type="text"
+      inputMode={allowDecimal || decimals > 0 ? 'decimal' : 'numeric'}
+      value={display}
+      onFocus={(e) => {
+        setFocused(true)
+        // Show plain numeric value (no commas) for easy editing.
+        setDraft(value == null || value === '' ? '' : String(value))
+        // Move cursor to end so user can immediately keep typing.
+        requestAnimationFrame(() => {
+          try { e.target.setSelectionRange(e.target.value.length, e.target.value.length) } catch {}
+        })
+      }}
+      onChange={(e) => {
+        const raw = e.target.value
+        // Strip commas/spaces; keep digits, optional minus, single decimal point.
+        const cleaned = raw.replace(/[, ]/g, '')
+        if (cleaned === '' || cleaned === '-') {
+          setDraft(cleaned)
+          onChange(0)
+          return
+        }
+        const allowDec = allowDecimal || decimals > 0
+        const re = allowDec ? /^-?\d*\.?\d*$/ : /^-?\d*$/
+        if (!re.test(cleaned)) return
+        setDraft(cleaned)
+        const parsed = allowDec ? parseFloat(cleaned) : parseInt(cleaned, 10)
+        if (!isNaN(parsed)) onChange(parsed)
+      }}
+      onBlur={() => { setFocused(false); setDraft('') }}
+      style={style}
+      {...rest}
+    />
+  )
+}
 
 function fmt(n) {
   if (!n && n !== 0) return '—'
@@ -238,26 +295,24 @@ function RoundRow({ round, onUpdate, onRemove, index, dragHandlers, isDragging, 
       {(() => {
         const unit = round.unit || 'K'
         const div = UNIT_DIVISOR[unit]
-        const fromInput = (v) => (+v) * div
-        const toDisplay = (raw) => {
-          const d = (raw || 0) / div
-          // Trim trailing zeros for M so '8.5' shows instead of '8.500000'.
-          return unit === 'M' ? +d.toFixed(6) : d
-        }
+        const decimals = unit === 'M' ? 1 : 0
+        const fromInput = (v) => Math.round((+v) * div)
+        // For $M, snap to 1 decimal so 30 → 30.0, 8.5 → 8.5.
+        const toDisplay = (raw) => +((raw || 0) / div).toFixed(unit === 'M' ? 6 : 0)
         return (
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12, marginBottom: 10 }}>
             <div>
               <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Pre-Money Val (${unit})</label>
               <div style={{ position: 'relative' }}>
                 <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>$</span>
-                <input type="number" step={unit === 'M' ? 0.1 : 1} value={toDisplay(round.preMoneyVal)} onChange={e => update('preMoneyVal', fromInput(e.target.value))} style={{ paddingLeft: 22 }} />
+                <NumberInput value={toDisplay(round.preMoneyVal)} onChange={(v) => update('preMoneyVal', fromInput(v))} decimals={decimals} allowDecimal={unit === 'M'} style={{ paddingLeft: 22 }} />
               </div>
             </div>
             <div>
               <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Investment (${unit})</label>
               <div style={{ position: 'relative' }}>
                 <span style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }}>$</span>
-                <input type="number" step={unit === 'M' ? 0.1 : 1} value={toDisplay(round.investment)} onChange={e => update('investment', fromInput(e.target.value))} style={{ paddingLeft: 22 }} />
+                <NumberInput value={toDisplay(round.investment)} onChange={(v) => update('investment', fromInput(v))} decimals={decimals} allowDecimal={unit === 'M'} style={{ paddingLeft: 22 }} />
               </div>
             </div>
           </div>
@@ -282,15 +337,88 @@ function RoundRow({ round, onUpdate, onRemove, index, dragHandlers, isDragging, 
               >{m === 'shares' ? '#' : '%'}</button>
             ))}
           </div>
-          <input
-            type="number"
+          <NumberInput
             value={round.grantValue ?? 0}
-            onChange={e => update('grantValue', +e.target.value)}
+            onChange={(v) => update('grantValue', v)}
+            decimals={round.grantMode === 'pct' ? 1 : 0}
+            allowDecimal={round.grantMode === 'pct'}
             style={{ flex: 1 }}
             placeholder={round.grantMode === 'pct' ? '% of reserve' : 'shares'}
           />
         </div>
       </div>
+    </div>
+  )
+}
+
+function ScaleButton({ currentTotal, onScale, disabled }) {
+  const [open, setOpen] = useState(false)
+  const [target, setTarget] = useState(currentTotal || 10000000)
+  const ref = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDocClick = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [open])
+
+  // When opening, prefill with current total so user sees what they're starting from.
+  useEffect(() => {
+    if (open) setTarget(currentTotal || 10000000)
+  }, [open, currentTotal])
+
+  const apply = () => {
+    if (target > 0) onScale(target)
+    setOpen(false)
+  }
+
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <button
+        onClick={() => !disabled && setOpen(o => !o)}
+        disabled={disabled}
+        title="Scale total founder shares to a target, preserving the current % split"
+        style={{
+          background: 'transparent', border: '1px solid var(--border-accent)',
+          color: 'var(--text-muted)', fontSize: 11, borderRadius: 4,
+          padding: '3px 10px', letterSpacing: '0.05em',
+          fontFamily: 'DM Mono', cursor: disabled ? 'not-allowed' : 'pointer',
+          opacity: disabled ? 0.4 : 1,
+        }}
+      >SCALE ▾</button>
+      {open && (
+        <div style={{
+          position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 50,
+          background: '#14141f', border: '1px solid var(--border-accent)',
+          borderRadius: 6, padding: 12, minWidth: 220,
+          boxShadow: '0 6px 24px rgba(0,0,0,0.4)',
+        }}>
+          <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 10, marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.06em', fontFamily: 'Syne', fontWeight: 700 }}>
+            Target total founder shares
+          </label>
+          <NumberInput
+            value={target}
+            onChange={(v) => setTarget(v)}
+            style={{ width: '100%', marginBottom: 8 }}
+            placeholder="e.g. 10,000,000"
+            autoFocus
+          />
+          <div style={{ fontSize: 10, color: 'var(--text-dim)', marginBottom: 10, lineHeight: 1.4 }}>
+            Distributes shares according to current founder % split.
+          </div>
+          <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+            <button
+              onClick={() => setOpen(false)}
+              style={{ background: 'transparent', border: '1px solid var(--border)', color: 'var(--text-muted)', fontSize: 11, padding: '4px 10px', borderRadius: 4, fontFamily: 'DM Mono', cursor: 'pointer' }}
+            >CANCEL</button>
+            <button
+              onClick={apply}
+              style={{ background: 'var(--accent-dim)', border: '1px solid var(--accent)', color: 'var(--accent)', fontSize: 11, padding: '4px 10px', borderRadius: 4, fontFamily: 'DM Mono', cursor: 'pointer' }}
+            >APPLY</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -490,6 +618,21 @@ export default function App() {
     setFounders(founders.map(f => ({ ...f, shares: each })))
   }
 
+  // Scale founder shares so total founder shares = `targetTotal`,
+  // preserving the current ownership split (% within founders).
+  const scaleFounders = (targetTotal) => {
+    if (founders.length === 0 || !targetTotal || targetTotal <= 0) return
+    const currentTotal = founders.reduce((s, f) => s + (f.shares || 0), 0)
+    if (currentTotal === 0) {
+      // No existing split — split target equally.
+      const each = Math.round(targetTotal / founders.length)
+      setFounders(founders.map(f => ({ ...f, shares: each })))
+      return
+    }
+    const factor = targetTotal / currentTotal
+    setFounders(founders.map(f => ({ ...f, shares: Math.round((f.shares || 0) * factor) })))
+  }
+
   // Edit a founder's % directly. Holds total founder shares constant; redistributes
   // the difference proportionally across the OTHER founders so percentages sum to 100%.
   const updateFounderPct = (idx, newPct) => {
@@ -575,6 +718,11 @@ export default function App() {
                     opacity: founders.length < 2 ? 0.4 : 1,
                   }}
                 >EQUALIZE</button>
+                <ScaleButton
+                  currentTotal={founders.reduce((s, f) => s + (f.shares || 0), 0)}
+                  onScale={scaleFounders}
+                  disabled={founders.length === 0}
+                />
                 <button
                   onClick={addFounder}
                   style={{
@@ -600,18 +748,18 @@ export default function App() {
                     onChange={e => updateFounder(idx, 'name', e.target.value)}
                     style={{ flex: 1, background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-accent)', borderRadius: 0, padding: '2px 0', fontFamily: 'Syne', fontWeight: 600 }}
                   />
-                  <input
-                    type="number" value={f.shares}
-                    onChange={e => updateFounder(idx, 'shares', +e.target.value)}
-                    style={{ width: 100, textAlign: 'right', fontSize: 12 }}
+                  <NumberInput
+                    value={f.shares}
+                    onChange={(v) => updateFounder(idx, 'shares', v)}
+                    style={{ width: 110, textAlign: 'right', fontSize: 12 }}
                     placeholder="Shares"
                   />
-                  <div style={{ position: 'relative', width: 64 }}>
-                    <input
-                      type="number"
-                      step={0.1}
+                  <div style={{ position: 'relative', width: 80 }}>
+                    <NumberInput
                       value={+founderPct.toFixed(2)}
-                      onChange={e => updateFounderPct(idx, +e.target.value)}
+                      onChange={(v) => updateFounderPct(idx, v)}
+                      decimals={2}
+                      allowDecimal
                       disabled={founders.length < 2}
                       title={founders.length < 2 ? 'Add another founder to edit %' : 'Edit % — redistributes among other founders'}
                       style={{ width: '100%', textAlign: 'right', fontSize: 12, paddingRight: 16 }}
@@ -638,10 +786,9 @@ export default function App() {
               <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 11, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                 Reserved Shares (pre-funding)
               </label>
-              <input
-                type="number"
+              <NumberInput
                 value={employeeReserve}
-                onChange={e => setEmployeeReserve(Math.max(0, +e.target.value))}
+                onChange={(v) => setEmployeeReserve(Math.max(0, v))}
                 placeholder="0"
               />
               <label
