@@ -357,7 +357,7 @@ export default function App() {
   const states = useMemo(() => computeRounds(founders, rounds, employeeReserve), [founders, rounds, employeeReserve])
 
   const chartData = states.map(state => {
-    const row = { name: state.label, _total: state.totalShares }
+    const row = { name: state.label }
     Object.entries(state.ownership).forEach(([k, v]) => {
       if (valueMode === 'shares') {
         row[k] = Math.round(v * state.totalShares)
