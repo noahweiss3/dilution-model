@@ -4,6 +4,8 @@ import {
   ResponsiveContainer, BarChart, Bar, Cell, Legend
 } from 'recharts'
 import * as XLSX from 'xlsx'
+import AuthBar from './components/AuthBar.jsx'
+import ScenariosMenu from './components/ScenariosMenu.jsx'
 
 const ROUND_COLORS = ['#7c6cfc', '#fc6c8f', '#6cfcb8', '#fcb86c', '#6cb8fc', '#fc6cfc']
 
@@ -681,13 +683,41 @@ function downloadXlsx(wb, filename) {
   XLSX.writeFile(wb, filename)
 }
 
-export default function App() {
-  const [founders, setFounders] = useState(DEFAULT_FOUNDERS)
-  const [employeeReserve, setEmployeeReserve] = useState(DEFAULT_RESERVE)
-  const [employeesOnCapTablePreGrant, setEmployeesOnCapTablePreGrant] = useState(false)
-  const [rounds, setRounds] = useState(DEFAULT_ROUNDS)
+// localStorage key for the auto-saved anonymous scenario.
+const LOCAL_SCENARIO_KEY = 'dilution-model:current'
+
+// Hydrate from localStorage on first render. Falls back to defaults if missing or malformed.
+function loadInitialScenario() {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw = localStorage.getItem(LOCAL_SCENARIO_KEY)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+export default function App({ clerkConfigured = false }) {
+  const initial = useMemo(() => loadInitialScenario(), [])
+  const [founders, setFounders] = useState(initial?.founders ?? DEFAULT_FOUNDERS)
+  const [employeeReserve, setEmployeeReserve] = useState(initial?.employeeReserve ?? DEFAULT_RESERVE)
+  const [employeesOnCapTablePreGrant, setEmployeesOnCapTablePreGrant] = useState(initial?.employeesOnCapTablePreGrant ?? false)
+  const [rounds, setRounds] = useState(initial?.rounds ?? DEFAULT_ROUNDS)
   const [activeTab, setActiveTab] = useState('chart')
   const [valueMode, setValueMode] = useState('pct') // 'pct' | 'shares'
+
+  // Auto-save scenario to localStorage on any change.
+  useEffect(() => {
+    try {
+      localStorage.setItem(LOCAL_SCENARIO_KEY, JSON.stringify({
+        founders, employeeReserve, employeesOnCapTablePreGrant, rounds,
+        savedAt: new Date().toISOString(),
+      }))
+    } catch { /* quota exceeded or private mode — fail silently */ }
+  }, [founders, employeeReserve, employeesOnCapTablePreGrant, rounds])
 
   const states = useMemo(
     () => computeRounds(founders, rounds, employeeReserve, employeesOnCapTablePreGrant),
@@ -877,7 +907,20 @@ export default function App() {
         <span style={{ color: 'var(--text-dim)', fontSize: 11, letterSpacing: '0.12em', textTransform: 'uppercase' }}>
           equity modeling tool
         </span>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+        <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+          <ScenariosMenu
+            clerkConfigured={clerkConfigured}
+            getScenarioState={() => ({
+              founders, employeeReserve, employeesOnCapTablePreGrant, rounds,
+            })}
+            applyScenarioState={(data) => {
+              if (!data) return
+              if (Array.isArray(data.founders)) setFounders(data.founders)
+              if (typeof data.employeeReserve === 'number') setEmployeeReserve(data.employeeReserve)
+              if (typeof data.employeesOnCapTablePreGrant === 'boolean') setEmployeesOnCapTablePreGrant(data.employeesOnCapTablePreGrant)
+              if (Array.isArray(data.rounds)) setRounds(data.rounds)
+            }}
+          />
           <button
             onClick={() => {
               const wb = buildExportWorkbook({
@@ -894,6 +937,7 @@ export default function App() {
               fontFamily: 'DM Mono', cursor: 'pointer',
             }}
           >EXPORT .XLSX</button>
+          <AuthBar clerkConfigured={clerkConfigured} />
         </div>
       </div>
 
