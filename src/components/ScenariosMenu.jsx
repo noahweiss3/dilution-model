@@ -23,7 +23,9 @@ export default function ScenariosMenu({ getScenarioState, applyScenarioState, cl
   // re-create when sign-in state changes (so the new JWT is used).
   const supabase = useMemo(() => {
     if (!isSignedIn || !supabaseConfigured) return null
-    return makeSupabaseClient(() => getToken({ template: 'supabase' }))
+    // Native Supabase↔Clerk integration: use the default Clerk session token
+    // (no JWT template), which Supabase verifies via JWKS from the Clerk domain.
+    return makeSupabaseClient(() => getToken())
   }, [isSignedIn, getToken])
 
   const [scenarios, setScenarios] = useState([])
