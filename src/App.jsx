@@ -230,13 +230,13 @@ function computeRounds(founders, rounds, employeeReserve = 0, employeesOnCapTabl
   return states
 }
 
-function RoundRow({ round, onUpdate, onRemove, index, dragHandlers, isDragging, isDragOver, roundState, prevState, reserveCap }) {
+function RoundRow({ round, onUpdate, onPatch, onRemove, index, dragHandlers, isDragging, isDragOver, roundState, prevState, reserveCap }) {
   // When grant mode toggles, reset value to a sensible default so a "200000 shares"
-  // value isn't silently reinterpreted as "200000%".
+  // value isn't silently reinterpreted as "200000%". Both fields must land in one
+  // state update so the second change doesn't get overwritten by a stale snapshot.
   const update = (field, val) => {
     if (field === 'grantMode' && val !== round.grantMode) {
-      onUpdate(index, 'grantMode', val)
-      onUpdate(index, 'grantValue', 0)
+      onPatch(index, { grantMode: val, grantValue: 0 })
       return
     }
     onUpdate(index, field, val)
@@ -613,7 +613,10 @@ export default function App() {
   }
 
   const updateRound = (idx, field, val) => {
-    setRounds(rounds.map((r, i) => i === idx ? { ...r, [field]: val } : r))
+    setRounds(prev => prev.map((r, i) => i === idx ? { ...r, [field]: val } : r))
+  }
+  const patchRound = (idx, patch) => {
+    setRounds(prev => prev.map((r, i) => i === idx ? { ...r, ...patch } : r))
   }
 
   const removeRound = (idx) => setRounds(rounds.filter((_, i) => i !== idx))
@@ -886,6 +889,7 @@ export default function App() {
                 round={r}
                 index={idx}
                 onUpdate={updateRound}
+                onPatch={patchRound}
                 onRemove={removeRound}
                 dragHandlers={makeDragHandlers(idx)}
                 isDragging={dragIdx === idx}
