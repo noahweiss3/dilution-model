@@ -230,8 +230,28 @@ function computeRounds(founders, rounds, employeeReserve = 0, employeesOnCapTabl
   return states
 }
 
-function RoundRow({ round, onUpdate, onRemove, index, dragHandlers, isDragging, isDragOver }) {
-  const update = (field, val) => onUpdate(index, field, val)
+function RoundRow({ round, onUpdate, onRemove, index, dragHandlers, isDragging, isDragOver, roundState, prevState, reserveCap }) {
+  // When grant mode toggles, reset value to a sensible default so a "200000 shares"
+  // value isn't silently reinterpreted as "200000%".
+  const update = (field, val) => {
+    if (field === 'grantMode' && val !== round.grantMode) {
+      onUpdate(index, 'grantMode', val)
+      onUpdate(index, 'grantValue', 0)
+      return
+    }
+    onUpdate(index, field, val)
+  }
+
+  // Derived: dilution to existing holders this round.
+  // dilutionPct = 1 - prevTotal / newTotal (any holder's pct shrinks by this factor)
+  const dilutionPct = (roundState && prevState && roundState.totalShares > 0)
+    ? 1 - (prevState.totalShares / roundState.totalShares)
+    : 0
+
+  // Live-converted grant share count when in % mode.
+  const grantSharesPreview = round.grantMode === 'pct'
+    ? Math.round(((round.grantValue || 0) / 100) * (reserveCap || 0))
+    : null
   return (
     <div
       onDragOver={dragHandlers.onDragOver}
@@ -346,7 +366,30 @@ function RoundRow({ round, onUpdate, onRemove, index, dragHandlers, isDragging, 
             placeholder={round.grantMode === 'pct' ? '% of reserve' : 'shares'}
           />
         </div>
+        {grantSharesPreview !== null && (
+          <div style={{ marginTop: 4, fontSize: 10, color: 'var(--text-dim)', fontFamily: 'DM Mono', textAlign: 'right' }}>
+            = {grantSharesPreview.toLocaleString()} shares
+          </div>
+        )}
       </div>
+
+      {/* Derived stats */}
+      {roundState && (
+        <div style={{
+          marginTop: 12, paddingTop: 10, borderTop: '1px solid var(--border)',
+          display: 'flex', justifyContent: 'space-between', gap: 12,
+          fontSize: 11, fontFamily: 'DM Mono', color: 'var(--text-muted)',
+        }}>
+          <div>
+            <span style={{ color: 'var(--text-dim)' }}>Post-Money: </span>
+            <span style={{ color: 'var(--accent)' }}>{fmt(roundState.postMoney)}</span>
+          </div>
+          <div>
+            <span style={{ color: 'var(--text-dim)' }}>Dilution: </span>
+            <span style={{ color: 'var(--text)' }}>{(dilutionPct * 100).toFixed(2)}%</span>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -703,7 +746,7 @@ export default function App() {
           <div style={{ marginBottom: 28 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, gap: 8 }}>
               <span style={{ fontFamily: 'Syne', fontWeight: 700, fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
-                Founders & Cap Table
+                Initial Cap Table
               </span>
               <div style={{ display: 'flex', gap: 6 }}>
                 <button
@@ -847,6 +890,9 @@ export default function App() {
                 dragHandlers={makeDragHandlers(idx)}
                 isDragging={dragIdx === idx}
                 isDragOver={dragOverIdx === idx && dragIdx !== idx}
+                roundState={states[idx + 1]}
+                prevState={states[idx]}
+                reserveCap={employeeReserve}
               />
             ))}
           </div>
@@ -993,25 +1039,33 @@ export default function App() {
                         const sharesAbs = val !== undefined ? Math.round(val * s.totalShares) : null
                         const prevSharesAbs = prev !== undefined && prev !== null ? Math.round(prev * states[si - 1].totalShares) : null
                         const sharesDelta = sharesAbs !== null && prevSharesAbs !== null ? sharesAbs - prevSharesAbs : null
+                        const stakeValue = val !== undefined && s.postMoney ? val * s.postMoney : null
                         return (
                           <td key={si} style={{ textAlign: 'right', padding: '9px 12px', fontFamily: 'DM Mono' }}>
                             {val !== undefined ? (
                               <div>
-                                <span style={{ color: 'var(--text)' }}>
-                                  {showShares ? fmtShares(sharesAbs) : pct(val)}
-                                </span>
-                                {showShares
-                                  ? (sharesDelta !== null && sharesDelta !== 0 && (
-                                      <span style={{ fontSize: 10, color: sharesDelta < 0 ? 'var(--red)' : 'var(--green)', marginLeft: 6 }}>
-                                        {sharesDelta > 0 ? '+' : ''}{fmtShares(Math.abs(sharesDelta)).replace(/^/, sharesDelta < 0 ? '-' : '')}
-                                      </span>
-                                    ))
-                                  : (delta !== null && delta !== 0 && (
-                                      <span style={{ fontSize: 10, color: delta < 0 ? 'var(--red)' : 'var(--green)', marginLeft: 6 }}>
-                                        {delta > 0 ? '+' : ''}{pct(delta)}
-                                      </span>
-                                    ))
-                                }
+                                <div>
+                                  <span style={{ color: 'var(--text)' }}>
+                                    {showShares ? fmtShares(sharesAbs) : pct(val)}
+                                  </span>
+                                  {showShares
+                                    ? (sharesDelta !== null && sharesDelta !== 0 && (
+                                        <span style={{ fontSize: 10, color: sharesDelta < 0 ? 'var(--red)' : 'var(--green)', marginLeft: 6 }}>
+                                          {sharesDelta > 0 ? '+' : ''}{fmtShares(Math.abs(sharesDelta)).replace(/^/, sharesDelta < 0 ? '-' : '')}
+                                        </span>
+                                      ))
+                                    : (delta !== null && delta !== 0 && (
+                                        <span style={{ fontSize: 10, color: delta < 0 ? 'var(--red)' : 'var(--green)', marginLeft: 6 }}>
+                                          {delta > 0 ? '+' : ''}{pct(delta)}
+                                        </span>
+                                      ))
+                                  }
+                                </div>
+                                {stakeValue !== null && (
+                                  <div style={{ fontSize: 10, color: 'var(--text-dim)', marginTop: 2 }}>
+                                    {fmt(stakeValue)}
+                                  </div>
+                                )}
                               </div>
                             ) : <span style={{ color: 'var(--text-dim)' }}>—</span>}
                           </td>
@@ -1019,8 +1073,21 @@ export default function App() {
                       })}
                     </tr>
                   ))}
-                  {/* Valuation row */}
+                  {/* Total row */}
                   <tr style={{ borderTop: '2px solid var(--border-accent)' }}>
+                    <td style={{ padding: '9px 12px', color: 'var(--text-muted)', fontFamily: 'Syne', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Total</td>
+                    {states.map((s, si) => {
+                      const showShares = valueMode === 'shares'
+                      const totalPct = Object.values(s.ownership).reduce((sum, v) => sum + (v || 0), 0)
+                      return (
+                        <td key={si} style={{ textAlign: 'right', padding: '9px 12px', color: 'var(--text)', fontFamily: 'DM Mono' }}>
+                          {showShares ? fmtShares(s.totalShares) : `${(totalPct * 100).toFixed(1)}%`}
+                        </td>
+                      )
+                    })}
+                  </tr>
+                  {/* Post-Money row */}
+                  <tr>
                     <td style={{ padding: '9px 12px', color: 'var(--text-muted)', fontFamily: 'Syne', fontWeight: 700, fontSize: 10, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Post-Money</td>
                     {states.map((s, si) => (
                       <td key={si} style={{ textAlign: 'right', padding: '9px 12px', color: 'var(--accent)', fontFamily: 'DM Mono' }}>
@@ -1053,11 +1120,30 @@ export default function App() {
                   <XAxis dataKey="label" tick={{ fill: 'var(--text-muted)', fontSize: 11, fontFamily: 'DM Mono' }} axisLine={false} tickLine={false} />
                   <YAxis tickFormatter={v => `$${(v / 1e6).toFixed(0)}M`} tick={{ fill: 'var(--text-muted)', fontSize: 11, fontFamily: 'DM Mono' }} axisLine={false} tickLine={false} />
                   <Tooltip
-                    formatter={(v) => fmt(v)}
                     cursor={{ fill: 'rgba(124,108,252,0.08)' }}
-                    contentStyle={{ background: '#14141f', border: '1px solid var(--border-accent)', borderRadius: 6, fontFamily: 'DM Mono', fontSize: 12, color: '#e8e8f0' }}
-                    labelStyle={{ color: '#a4a4b8', fontFamily: 'Syne', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10, marginBottom: 4 }}
-                    itemStyle={{ color: '#e8e8f0' }}
+                    content={({ active, payload, label }) => {
+                      if (!active || !payload || !payload.length) return null
+                      const datum = payload[0].payload
+                      return (
+                        <div style={{
+                          background: '#14141f', border: '1px solid var(--border-accent)',
+                          borderRadius: 6, padding: '10px 14px', fontSize: 12,
+                          color: '#e8e8f0', fontFamily: 'DM Mono',
+                        }}>
+                          <div style={{ color: '#a4a4b8', marginBottom: 6, fontFamily: 'Syne', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', fontSize: 10 }}>{label}</div>
+                          {payload.map((p, i) => (
+                            <div key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: 20 }}>
+                              <span style={{ color: '#a4a4b8' }}>{p.name}</span>
+                              <span style={{ color: '#e8e8f0' }}>{fmt(p.value)}</span>
+                            </div>
+                          ))}
+                          <div style={{ borderTop: '1px solid var(--border-accent)', marginTop: 6, paddingTop: 6, display: 'flex', justifyContent: 'space-between', gap: 20 }}>
+                            <span style={{ color: '#a4a4b8' }}>Post-Money</span>
+                            <span style={{ color: 'var(--accent)' }}>{fmt(datum.postMoney)}</span>
+                          </div>
+                        </div>
+                      )
+                    }}
                   />
                   <Bar dataKey="preMoney" name="Pre-Money" radius={[3, 3, 0, 0]}>
                     {states.slice(1).map((_, i) => (
