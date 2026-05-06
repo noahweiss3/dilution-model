@@ -6,6 +6,7 @@ import {
 import * as XLSX from 'xlsx'
 import AuthBar from './components/AuthBar.jsx'
 import ScenariosMenu from './components/ScenariosMenu.jsx'
+import { computeRounds, RESERVE_KEY, GRANTED_KEY } from './model/dilutionEngine.js'
 
 const ROUND_COLORS = ['#7c6cfc', '#fc6c8f', '#6cfcb8', '#fcb86c', '#6cb8fc', '#fc6cfc']
 
@@ -115,122 +116,6 @@ function fmt(n) {
 
 function pct(n) {
   return `${(n * 100).toFixed(2)}%`
-}
-
-const RESERVE_KEY = 'Employee Reserve (Unallocated)'
-const GRANTED_KEY = 'Employees (Granted)'
-
-function computeRounds(founders, rounds, employeeReserve = 0, employeesOnCapTablePreGrant = true) {
-  const founderTotal = founders.reduce((s, f) => s + (f.shares || 0), 0)
-  const reserveCap = Math.max(0, Math.round(employeeReserve || 0))
-
-  // Two modes:
-  //   preGrant=true  → entire reserve is issued upfront and dilutes everyone now; grants
-  //                    transfer from "Unallocated" to "Granted" (no new shares issued).
-  //   preGrant=false → reserve is just a budget cap; granting issues NEW shares each round
-  //                    (dilutes everyone at grant time). No "Unallocated" bucket on the cap table.
-  const reserveIssuedUpfront = employeesOnCapTablePreGrant ? reserveCap : 0
-  const preFundTotal = founderTotal + reserveIssuedUpfront
-
-  let states = []
-  let prevTotal = preFundTotal
-  let unallocatedReserve = reserveIssuedUpfront
-  let granted = 0
-
-  // Pre-funding state
-  const preFund = {
-    label: 'Pre-Funding',
-    totalShares: preFundTotal,
-    ownership: {},
-    postMoney: null,
-    preMoney: null,
-    newInvestors: 0,
-    roundIdx: -1,
-  }
-  founders.forEach(f => {
-    preFund.ownership[f.name] = preFundTotal > 0 ? f.shares / preFundTotal : 0
-  })
-  if (employeesOnCapTablePreGrant && reserveIssuedUpfront > 0) {
-    preFund.ownership[RESERVE_KEY] = reserveIssuedUpfront / preFundTotal
-  }
-  states.push(preFund)
-
-  rounds.forEach((round, idx) => {
-    const preVal = round.preMoneyVal || 0
-    const invest = round.investment || 0
-    const postVal = preVal + invest
-
-    const pricePerShare = prevTotal > 0 ? preVal / prevTotal : 0
-    const newInvestorShares = pricePerShare > 0 ? Math.round(invest / pricePerShare) : 0
-
-    // Resolve grant for this round.
-    let grantShares = 0
-    if (round.grantMode === 'pct') {
-      const pct = (round.grantValue || 0) / 100
-      grantShares = Math.round(pct * reserveCap)
-    } else {
-      grantShares = Math.round(round.grantValue || 0)
-    }
-    // Cap by remaining grant budget (total reserve - already-granted).
-    const grantBudgetRemaining = Math.max(0, reserveCap - granted)
-    grantShares = Math.max(0, Math.min(grantShares, grantBudgetRemaining))
-
-    let newTotal
-    if (employeesOnCapTablePreGrant) {
-      // Grant transfers from unallocated to granted; total only grows from investor issuance.
-      newTotal = prevTotal + newInvestorShares
-      unallocatedReserve -= grantShares
-      granted += grantShares
-    } else {
-      // Grant issues new shares this round, alongside investor shares.
-      newTotal = prevTotal + newInvestorShares + grantShares
-      granted += grantShares
-    }
-
-    const state = {
-      label: round.name,
-      totalShares: newTotal,
-      preMoney: preVal,
-      postMoney: postVal,
-      pricePerShare,
-      investment: invest,
-      newInvestorShares,
-      grantShares,
-      roundIdx: idx,
-      ownership: {},
-    }
-
-    // Founders dilute proportionally to total share growth.
-    founders.forEach(f => {
-      const prevState = states[states.length - 1]
-      const founderShareCount = Math.round((prevState.ownership[f.name] || 0) * prevState.totalShares)
-      state.ownership[f.name] = founderShareCount / newTotal
-    })
-
-    // Investors from previous rounds — keep absolute shares, dilute by new total.
-    states.forEach((s, si) => {
-      if (si === 0) return
-      const key = s.label
-      const prevInvShares = Math.round((states[states.length - 1].ownership[key] || 0) * prevTotal)
-      state.ownership[key] = prevInvShares / newTotal
-    })
-
-    // New investors this round.
-    state.ownership[round.name] = newInvestorShares / newTotal
-
-    // Employee buckets.
-    if (employeesOnCapTablePreGrant) {
-      if (unallocatedReserve > 0) state.ownership[RESERVE_KEY] = unallocatedReserve / newTotal
-      if (granted > 0) state.ownership[GRANTED_KEY] = granted / newTotal
-    } else {
-      if (granted > 0) state.ownership[GRANTED_KEY] = granted / newTotal
-    }
-
-    prevTotal = newTotal
-    states.push(state)
-  })
-
-  return states
 }
 
 function RoundRow({ round, onUpdate, onPatch, onRemove, index, dragHandlers, isDragging, isDragOver, roundState, prevState, reserveCap }) {

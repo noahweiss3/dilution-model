@@ -1,0 +1,106 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`golden snapshot — default scenario > matches the recorded cap table for DEFAULT_FOUNDERS + DEFAULT_ROUNDS + DEFAULT_RESERVE (preGrant=false) 1`] = `
+[
+  {
+    "label": "Pre-Funding",
+    "newInvestors": 0,
+    "ownership": {
+      "Founder 1": 0.5,
+      "Founder 2": 0.5,
+    },
+    "postMoney": null,
+    "preMoney": null,
+    "roundIdx": -1,
+    "totalShares": 10000000,
+  },
+  {
+    "grantShares": 0,
+    "investment": 3100000,
+    "label": "Seed",
+    "newInvestorShares": 1937500,
+    "ownership": {
+      "Founder 1": 0.418848167539267,
+      "Founder 2": 0.418848167539267,
+      "Seed": 0.16230366492146597,
+    },
+    "postMoney": 19100000,
+    "preMoney": 16000000,
+    "pricePerShare": 1.6,
+    "roundIdx": 0,
+    "totalShares": 11937500,
+  },
+  {
+    "grantShares": 0,
+    "investment": 10000000,
+    "label": "Series A",
+    "newInvestorShares": 3979167,
+    "ownership": {
+      "Founder 1": 0.3141361190756834,
+      "Founder 2": 0.3141361190756834,
+      "Seed": 0.12172774614182731,
+      "Series A": 0.25000001570680597,
+    },
+    "postMoney": 40000000,
+    "preMoney": 30000000,
+    "pricePerShare": 2.513089005235602,
+    "roundIdx": 1,
+    "totalShares": 15916667,
+  },
+]
+`;
+
+exports[`golden snapshot — default scenario > matches the recorded cap table for the same inputs in preGrant=true mode 1`] = `
+[
+  {
+    "label": "Pre-Funding",
+    "newInvestors": 0,
+    "ownership": {
+      "Employee Reserve (Unallocated)": 0.2,
+      "Founder 1": 0.4,
+      "Founder 2": 0.4,
+    },
+    "postMoney": null,
+    "preMoney": null,
+    "roundIdx": -1,
+    "totalShares": 12500000,
+  },
+  {
+    "grantShares": 250000,
+    "investment": 3100000,
+    "label": "Seed",
+    "newInvestorShares": 2421875,
+    "ownership": {
+      "Employee Reserve (Unallocated)": 0.15078534031413612,
+      "Employees (Granted)": 0.016753926701570682,
+      "Founder 1": 0.33507853403141363,
+      "Founder 2": 0.33507853403141363,
+      "Seed": 0.16230366492146597,
+    },
+    "postMoney": 19100000,
+    "preMoney": 16000000,
+    "pricePerShare": 1.28,
+    "roundIdx": 0,
+    "totalShares": 14921875,
+  },
+  {
+    "grantShares": 500000,
+    "investment": 10000000,
+    "label": "Series A",
+    "newInvestorShares": 4973958,
+    "ownership": {
+      "Employee Reserve (Unallocated)": 0.0879581166568899,
+      "Employees (Granted)": 0.037696335710095674,
+      "Founder 1": 0.25130890473397116,
+      "Founder 2": 0.25130890473397116,
+      "Seed": 0.1217277507305173,
+      "Series A": 0.24999998743455476,
+    },
+    "postMoney": 40000000,
+    "preMoney": 30000000,
+    "pricePerShare": 2.0104712041884816,
+    "roundIdx": 1,
+    "totalShares": 19895833,
+  },
+]
+`;
