@@ -5,6 +5,46 @@
 export const RESERVE_KEY = 'Employee Reserve (Unallocated)'
 export const GRANTED_KEY = 'Employees (Granted)'
 
+const toShares = (value) => Math.max(0, Math.round(value || 0))
+
+function safeConversionForInstrument(instrument, pricedRoundPrice, prevTotalShares) {
+  if (!instrument || (instrument.type || 'safe') !== 'safe') return null
+  const investment = Math.max(0, instrument.investment || 0)
+  if (!investment || pricedRoundPrice <= 0) return null
+
+  const candidatePrices = [pricedRoundPrice]
+  if (instrument.valuationCap > 0 && prevTotalShares > 0) {
+    candidatePrices.push(instrument.valuationCap / prevTotalShares)
+  }
+  if (instrument.discountPct > 0 && instrument.discountPct < 100) {
+    candidatePrices.push(pricedRoundPrice * (1 - instrument.discountPct / 100))
+  }
+
+  const conversionPrice = Math.min(...candidatePrices.filter(price => price > 0))
+  if (!conversionPrice || !Number.isFinite(conversionPrice)) return null
+
+  const shares = toShares(investment / conversionPrice)
+  if (!shares) return null
+
+  return {
+    id: instrument.id,
+    holderName: instrument.holderName || 'SAFE Holder',
+    investment,
+    valuationCap: instrument.valuationCap ?? null,
+    discountPct: instrument.discountPct || 0,
+    conversionPrice,
+    shares,
+  }
+}
+
+function ownershipFromShares(holderShares, totalShares) {
+  const ownership = {}
+  Object.entries(holderShares).forEach(([holder, shares]) => {
+    if (shares > 0 && totalShares > 0) ownership[holder] = shares / totalShares
+  })
+  return ownership
+}
+
 // Compute cap-table state across a sequence of priced rounds.
 //
 // Two reserve modes:
@@ -17,34 +57,48 @@ export const GRANTED_KEY = 'Employees (Granted)'
 //
 // Grants per round are capped by the remaining grant budget
 // (reserve - shares already granted in earlier rounds).
-export function computeRounds(founders, rounds, employeeReserve = 0, employeesOnCapTablePreGrant = true) {
+//
+// SAFE/convertible MVP: all SAFE instruments convert in the first priced round
+// using the investor-favorable price among the priced-round price, valuation-cap
+// price, and discount price. Converted SAFE holder share counts then persist
+// through later rounds like any other existing holder.
+export function computeRounds(
+  founders,
+  rounds,
+  employeeReserve = 0,
+  employeesOnCapTablePreGrant = true,
+  instruments = [],
+) {
   const founderTotal = founders.reduce((s, f) => s + (f.shares || 0), 0)
-  const reserveCap = Math.max(0, Math.round(employeeReserve || 0))
+  const reserveCap = toShares(employeeReserve)
 
   const reserveIssuedUpfront = employeesOnCapTablePreGrant ? reserveCap : 0
   const preFundTotal = founderTotal + reserveIssuedUpfront
 
-  let states = []
+  const holderShares = {}
+  founders.forEach(f => {
+    const shares = toShares(f.shares)
+    if (shares > 0) holderShares[f.name] = shares
+  })
+  if (employeesOnCapTablePreGrant && reserveIssuedUpfront > 0) {
+    holderShares[RESERVE_KEY] = reserveIssuedUpfront
+  }
+
+  const states = []
   let prevTotal = preFundTotal
   let unallocatedReserve = reserveIssuedUpfront
   let granted = 0
+  let safesConverted = false
 
-  const preFund = {
+  states.push({
     label: 'Pre-Funding',
     totalShares: preFundTotal,
-    ownership: {},
+    ownership: ownershipFromShares(holderShares, preFundTotal),
     postMoney: null,
     preMoney: null,
     newInvestors: 0,
     roundIdx: -1,
-  }
-  founders.forEach(f => {
-    preFund.ownership[f.name] = preFundTotal > 0 ? f.shares / preFundTotal : 0
   })
-  if (employeesOnCapTablePreGrant && reserveIssuedUpfront > 0) {
-    preFund.ownership[RESERVE_KEY] = reserveIssuedUpfront / preFundTotal
-  }
-  states.push(preFund)
 
   rounds.forEach((round, idx) => {
     const preVal = round.preMoneyVal || 0
@@ -52,27 +106,44 @@ export function computeRounds(founders, rounds, employeeReserve = 0, employeesOn
     const postVal = preVal + invest
 
     const pricePerShare = prevTotal > 0 ? preVal / prevTotal : 0
-    const newInvestorShares = pricePerShare > 0 ? Math.round(invest / pricePerShare) : 0
+    const newInvestorShares = pricePerShare > 0 ? toShares(invest / pricePerShare) : 0
+
+    const safeConversions = !safesConverted
+      ? instruments
+          .map(instrument => safeConversionForInstrument(instrument, pricePerShare, prevTotal))
+          .filter(Boolean)
+      : []
+    safesConverted = safesConverted || safeConversions.length > 0
+    const safeConversionShares = safeConversions.reduce((sum, conversion) => sum + conversion.shares, 0)
+    safeConversions.forEach(conversion => {
+      holderShares[conversion.holderName] = (holderShares[conversion.holderName] || 0) + conversion.shares
+    })
 
     let grantShares = 0
     if (round.grantMode === 'pct') {
       const pct = (round.grantValue || 0) / 100
-      grantShares = Math.round(pct * reserveCap)
+      grantShares = toShares(pct * reserveCap)
     } else {
-      grantShares = Math.round(round.grantValue || 0)
+      grantShares = toShares(round.grantValue)
     }
     const grantBudgetRemaining = Math.max(0, reserveCap - granted)
     grantShares = Math.max(0, Math.min(grantShares, grantBudgetRemaining))
 
     let newTotal
     if (employeesOnCapTablePreGrant) {
-      newTotal = prevTotal + newInvestorShares
+      newTotal = prevTotal + safeConversionShares + newInvestorShares
       unallocatedReserve -= grantShares
       granted += grantShares
+      if (unallocatedReserve > 0) holderShares[RESERVE_KEY] = unallocatedReserve
+      else delete holderShares[RESERVE_KEY]
+      if (granted > 0) holderShares[GRANTED_KEY] = granted
     } else {
-      newTotal = prevTotal + newInvestorShares + grantShares
+      newTotal = prevTotal + safeConversionShares + newInvestorShares + grantShares
       granted += grantShares
+      if (granted > 0) holderShares[GRANTED_KEY] = granted
     }
+
+    if (newInvestorShares > 0) holderShares[round.name] = (holderShares[round.name] || 0) + newInvestorShares
 
     const state = {
       label: round.name,
@@ -84,29 +155,11 @@ export function computeRounds(founders, rounds, employeeReserve = 0, employeesOn
       newInvestorShares,
       grantShares,
       roundIdx: idx,
-      ownership: {},
+      ownership: ownershipFromShares(holderShares, newTotal),
     }
-
-    founders.forEach(f => {
-      const prevState = states[states.length - 1]
-      const founderShareCount = Math.round((prevState.ownership[f.name] || 0) * prevState.totalShares)
-      state.ownership[f.name] = founderShareCount / newTotal
-    })
-
-    states.forEach((s, si) => {
-      if (si === 0) return
-      const key = s.label
-      const prevInvShares = Math.round((states[states.length - 1].ownership[key] || 0) * prevTotal)
-      state.ownership[key] = prevInvShares / newTotal
-    })
-
-    state.ownership[round.name] = newInvestorShares / newTotal
-
-    if (employeesOnCapTablePreGrant) {
-      if (unallocatedReserve > 0) state.ownership[RESERVE_KEY] = unallocatedReserve / newTotal
-      if (granted > 0) state.ownership[GRANTED_KEY] = granted / newTotal
-    } else {
-      if (granted > 0) state.ownership[GRANTED_KEY] = granted / newTotal
+    if (instruments.length > 0) {
+      state.safeConversionShares = safeConversionShares
+      state.safeConversions = safeConversions
     }
 
     prevTotal = newTotal

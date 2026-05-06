@@ -282,6 +282,44 @@ function RoundRow({ round, onUpdate, onPatch, onRemove, index, dragHandlers, isD
   )
 }
 
+function SafeInstrumentRow({ instrument, index, onUpdate, onRemove }) {
+  const update = (field, val) => onUpdate(index, field, val)
+  return (
+    <div style={{
+      background: 'var(--bg-card)', border: '1px solid var(--border)',
+      borderRadius: 6, padding: '10px 12px', marginBottom: 8,
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <input
+          type="text"
+          value={instrument.holderName}
+          onChange={e => update('holderName', e.target.value)}
+          style={{ flex: 1, background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-accent)', borderRadius: 0, padding: '2px 0', fontFamily: 'Syne', fontWeight: 600 }}
+          placeholder={`SAFE Holder ${index + 1}`}
+        />
+        <button onClick={() => onRemove(index)} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: 16, cursor: 'pointer' }}>×</button>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+        <div>
+          <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 10, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Investment ($)</label>
+          <NumberInput value={instrument.investment || 0} onChange={v => update('investment', Math.max(0, v))} placeholder="0" />
+        </div>
+        <div>
+          <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 10, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Val. Cap ($)</label>
+          <NumberInput value={instrument.valuationCap || 0} onChange={v => update('valuationCap', v > 0 ? Math.max(0, v) : null)} placeholder="Uncapped" />
+        </div>
+        <div>
+          <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 10, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Discount %</label>
+          <NumberInput value={instrument.discountPct || 0} onChange={v => update('discountPct', Math.max(0, Math.min(99, v)))} decimals={1} allowDecimal placeholder="0" />
+        </div>
+      </div>
+      <div style={{ marginTop: 6, fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.4 }}>
+        Converts in the first priced round at the best available price: round price, valuation cap, or discount.
+      </div>
+    </div>
+  )
+}
+
 function ScaleButton({ currentTotal, onScale, disabled }) {
   const [open, setOpen] = useState(false)
   const [target, setTarget] = useState(currentTotal || 10000000)
@@ -479,8 +517,8 @@ export default function App({ clerkConfigured = false }) {
   }, [founders, employeeReserve, employeesOnCapTablePreGrant, rounds, instruments])
 
   const states = useMemo(
-    () => computeRounds(founders, rounds, employeeReserve, employeesOnCapTablePreGrant),
-    [founders, rounds, employeeReserve, employeesOnCapTablePreGrant]
+    () => computeRounds(founders, rounds, employeeReserve, employeesOnCapTablePreGrant, instruments),
+    [founders, rounds, employeeReserve, employeesOnCapTablePreGrant, instruments]
   )
 
   const chartData = states.map(state => {
@@ -583,6 +621,21 @@ export default function App({ clerkConfigured = false }) {
   const addFounder = () => setFounders([...founders, { name: `Founder ${founders.length + 1}`, shares: 1000000 }])
   const updateFounder = (idx, field, val) => setFounders(founders.map((f, i) => i === idx ? { ...f, [field]: val } : f))
   const removeFounder = (idx) => setFounders(founders.filter((_, i) => i !== idx))
+
+  const addInstrument = () => setInstruments([...instruments, {
+    id: Date.now(),
+    type: 'safe',
+    holderName: `SAFE Holder ${instruments.length + 1}`,
+    investment: 250000,
+    valuationCap: null,
+    discountPct: 0,
+    mfn: false,
+    proRata: false,
+  }])
+  const updateInstrument = (idx, field, val) => setInstruments(instruments.map((instrument, i) => (
+    i === idx ? { ...instrument, [field]: val } : instrument
+  )))
+  const removeInstrument = (idx) => setInstruments(instruments.filter((_, i) => i !== idx))
 
   const equalizeFounders = () => {
     if (founders.length === 0) return
@@ -850,6 +903,46 @@ export default function App({ clerkConfigured = false }) {
                 ) : null
               })()}
             </div>
+          </div>
+
+          {/* Convertible Instruments */}
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <span style={{ fontFamily: 'Syne', fontWeight: 700, fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                SAFE / Convertibles
+              </span>
+              <button
+                onClick={addInstrument}
+                style={{
+                  background: 'var(--accent-dim)', border: '1px solid var(--accent)',
+                  color: 'var(--accent)', fontSize: 11, borderRadius: 4,
+                  padding: '3px 10px', letterSpacing: '0.05em',
+                  fontFamily: 'DM Mono', cursor: 'pointer',
+                }}
+              >+ SAFE</button>
+            </div>
+            {instruments.length === 0 ? (
+              <div style={{
+                background: 'var(--bg-card)', border: '1px dashed var(--border)',
+                borderRadius: 6, padding: '10px 12px', color: 'var(--text-dim)',
+                fontSize: 11, lineHeight: 1.4,
+              }}>
+                Add SAFEs to convert them in the first priced round. Valuation cap and discount are optional.
+              </div>
+            ) : instruments.map((instrument, idx) => (
+              <SafeInstrumentRow
+                key={instrument.id}
+                instrument={instrument}
+                index={idx}
+                onUpdate={updateInstrument}
+                onRemove={removeInstrument}
+              />
+            ))}
+            {states.some(s => s.safeConversionShares > 0) && (
+              <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)', fontFamily: 'DM Mono' }}>
+                Converted SAFE shares: <span style={{ color: 'var(--accent)' }}>{states.reduce((sum, s) => sum + (s.safeConversionShares || 0), 0).toLocaleString()}</span>
+              </div>
+            )}
           </div>
 
           {/* Rounds */}

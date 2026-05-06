@@ -106,15 +106,45 @@ The current implementation reconstructs prior stakeholder share counts from the 
 - Prior stakeholder share counts are rounded when carried forward.
 - Tests allow tiny ownership-sum tolerance around 100% due to rounding.
 
-## Planned SAFE support
+## SAFE / convertible instrument MVP
 
-SAFE/convertible support should be added before priced round conversion. At minimum, a SAFE instrument should include:
+The v1 scenario schema supports SAFE instruments with:
 
-- investor name
-- investment amount
-- valuation cap, optional
-- discount, optional
-- MFN/pro-rata metadata, initially informational if unsupported
-- conversion round
+- `holderName`
+- `investment`
+- `valuationCap` (optional; `null`/0 means uncapped)
+- `discountPct` (optional; 0 means no discount)
+- `mfn` and `proRata` metadata (stored/exported, not modeled economically yet)
 
-At the first priced round, SAFE conversion should compare applicable conversion prices and issue shares using the investor-favorable price, then include converted SAFE holders in all downstream states, views, and exports.
+All SAFEs currently convert in the first priced round. The priced round price is computed from the pre-SAFE previous total share count:
+
+```text
+pricedRoundPrice = preMoney / previousTotalShares
+```
+
+For each SAFE, the conversion price is the investor-favorable minimum of applicable prices:
+
+```text
+candidatePrices = [pricedRoundPrice]
+if valuationCap > 0:
+  candidatePrices += valuationCap / previousTotalShares
+if discountPct > 0:
+  candidatePrices += pricedRoundPrice * (1 - discountPct / 100)
+
+conversionPrice = min(candidatePrices)
+safeShares = round(investment / conversionPrice)
+```
+
+SAFE conversion shares are added to the first priced-round total share count alongside the priced investor shares and any grant-issued employee shares:
+
+```text
+newTotalShares = previousTotalShares + safeConversionShares + newInvestorShares [+ grantShares]
+```
+
+Converted SAFE holders then keep fixed absolute share counts and dilute through later priced rounds like other existing stakeholders.
+
+Current limitations:
+
+- Conversion happens only in the first priced round.
+- MFN/pro-rata fields are informational only.
+- Pre-money vs post-money SAFE variants, option-pool shuffles, interest, maturity dates, and note-specific mechanics are not modeled.

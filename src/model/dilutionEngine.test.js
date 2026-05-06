@@ -191,6 +191,75 @@ describe('grant cap', () => {
   })
 })
 
+describe('SAFE conversions', () => {
+  it('converts an uncapped SAFE at the priced-round price', () => {
+    const [, seed] = computeRounds(
+      oneFounder(),
+      [{ name: 'Seed', preMoneyVal: 10_000_000, investment: 2_000_000, grantMode: 'shares', grantValue: 0 }],
+      0,
+      false,
+      [{ id: 'safe-1', type: 'safe', holderName: 'Angel SAFE', investment: 500_000, valuationCap: null, discountPct: 0 }],
+    )
+
+    expect(seed.pricePerShare).toBe(1)
+    expect(seed.safeConversionShares).toBe(500_000)
+    expect(seed.safeConversions[0]).toMatchObject({ holderName: 'Angel SAFE', shares: 500_000, conversionPrice: 1 })
+    expect(seed.totalShares).toBe(10_000_000 + 500_000 + 2_000_000)
+    expect(seed.ownership['Angel SAFE']).toBeCloseTo(500_000 / seed.totalShares, 12)
+  })
+
+  it('uses valuation-cap price when cap is better than round price', () => {
+    const [, seed] = computeRounds(
+      oneFounder(),
+      [{ name: 'Seed', preMoneyVal: 10_000_000, investment: 2_000_000, grantMode: 'shares', grantValue: 0 }],
+      0,
+      false,
+      [{ id: 'safe-1', type: 'safe', holderName: 'Cap SAFE', investment: 500_000, valuationCap: 5_000_000, discountPct: 0 }],
+    )
+
+    expect(seed.safeConversions[0].conversionPrice).toBeCloseTo(0.5, 12)
+    expect(seed.safeConversions[0].shares).toBe(1_000_000)
+    expect(seed.ownership['Cap SAFE']).toBeCloseTo(1_000_000 / seed.totalShares, 12)
+  })
+
+  it('uses discount price when discount is better than valuation cap', () => {
+    const [, seed] = computeRounds(
+      oneFounder(),
+      [{ name: 'Seed', preMoneyVal: 10_000_000, investment: 2_000_000, grantMode: 'shares', grantValue: 0 }],
+      0,
+      false,
+      [{ id: 'safe-1', type: 'safe', holderName: 'Discount SAFE', investment: 500_000, valuationCap: 9_000_000, discountPct: 25 }],
+    )
+
+    expect(seed.safeConversions[0].conversionPrice).toBeCloseTo(0.75, 12)
+    expect(seed.safeConversions[0].shares).toBe(666_667)
+  })
+
+  it('converts multiple SAFEs and preserves them through later priced rounds', () => {
+    const states = computeRounds(
+      oneFounder(),
+      [
+        { name: 'Seed', preMoneyVal: 10_000_000, investment: 2_000_000, grantMode: 'shares', grantValue: 0 },
+        { name: 'Series A', preMoneyVal: 24_000_000, investment: 6_000_000, grantMode: 'shares', grantValue: 0 },
+      ],
+      0,
+      false,
+      [
+        { id: 'safe-1', type: 'safe', holderName: 'Angel SAFE', investment: 500_000, valuationCap: null, discountPct: 0 },
+        { id: 'safe-2', type: 'safe', holderName: 'Fund SAFE', investment: 250_000, valuationCap: 5_000_000, discountPct: 0 },
+      ],
+    )
+
+    const seed = states[1]
+    const seriesA = states[2]
+    expect(seed.safeConversionShares).toBe(1_000_000)
+    expect(seed.safeConversions).toHaveLength(2)
+    expect(Math.round(seriesA.ownership['Angel SAFE'] * seriesA.totalShares)).toBe(500_000)
+    expect(Math.round(seriesA.ownership['Fund SAFE'] * seriesA.totalShares)).toBe(500_000)
+    expect(seriesA.safeConversionShares).toBe(0)
+  })
+})
+
 describe('round invariants', () => {
   const scenarios = [
     {

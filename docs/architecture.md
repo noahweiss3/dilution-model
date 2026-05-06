@@ -37,12 +37,13 @@ The app works without backend env vars:
 - `employeeReserve`
 - `employeesOnCapTablePreGrant`
 - `rounds`
+- `instruments` (SAFE/convertible inputs)
 - UI-only state such as active tab and chart mode
 
 Derived cap-table states are computed with:
 
 ```js
-computeRounds(founders, rounds, employeeReserve, employeesOnCapTablePreGrant)
+computeRounds(founders, rounds, employeeReserve, employeesOnCapTablePreGrant, instruments)
 ```
 
 The scenario state is autosaved to localStorage under `dilution-model:current`. Saved scenarios store the same serializable shape in Supabase `scenarios.data`.
@@ -76,6 +77,6 @@ This keeps ExcelJS out of the initial app bundle. `exportWorkbook.js` builds fou
 ## Known architecture pressure points
 
 - `App.jsx` still contains too much UI and should be split into panels/components.
-- Scenario state is not yet versioned or schema-validated.
+- Scenario state is versioned and schema-validated; future migrations should extend `src/model/scenarioSchema.js`.
 - Supabase schema/RLS migrations are not yet in repo.
-- SAFE/convertible instruments require a richer instrument model before the first priced round.
+- SAFE/convertible MVP currently converts all SAFEs in the first priced round; later instrument variants need richer conversion timing/mechanics.

@@ -3,7 +3,7 @@
 import ExcelJS from 'exceljs'
 
 export async function buildWorkbook({
-  founders, employeeReserve, employeesOnCapTablePreGrant, rounds, states, allKeys,
+  founders, employeeReserve, employeesOnCapTablePreGrant, rounds, instruments = [], states, allKeys,
 }) {
   const wb = new ExcelJS.Workbook()
 
@@ -35,6 +35,23 @@ export async function buildWorkbook({
       r.grantMode || 'shares', r.grantValue || 0, grantShares,
     ])
   })
+  wsA.addRow([])
+  wsA.addRow(['SAFE / CONVERTIBLES'])
+  wsA.addRow(['Holder', 'Investment ($)', 'Valuation Cap ($)', 'Discount %', 'MFN', 'Pro Rata'])
+  if (instruments.length === 0) {
+    wsA.addRow(['None'])
+  } else {
+    instruments.forEach(instrument => {
+      wsA.addRow([
+        instrument.holderName || 'SAFE Holder',
+        instrument.investment || 0,
+        instrument.valuationCap || '',
+        instrument.discountPct || 0,
+        instrument.mfn ? 'Yes' : 'No',
+        instrument.proRata ? 'Yes' : 'No',
+      ])
+    })
+  }
   ;[32, 22, 20, 20, 14, 14, 14, 22].forEach((w, i) => { wsA.getColumn(i + 1).width = w })
 
   // ─── Cap Table ────────────────────────────────────────────────────────
@@ -59,9 +76,30 @@ export async function buildWorkbook({
   })
   wsT.addRow(totalsRow)
   wsT.addRow([])
-  wsT.addRow(['Round', 'Pre-Money', 'Investment', 'Post-Money', 'Price/Share', 'Total Shares', 'New Investor Shares', 'Grant Shares'])
+  wsT.addRow(['Round', 'Pre-Money', 'Investment', 'Post-Money', 'Price/Share', 'Total Shares', 'New Investor Shares', 'Grant Shares', 'SAFE Conversion Shares'])
   states.slice(1).forEach(s => {
-    wsT.addRow([s.label, s.preMoney || 0, s.investment || 0, s.postMoney || 0, s.pricePerShare || 0, s.totalShares, s.newInvestorShares || 0, s.grantShares || 0])
+    wsT.addRow([
+      s.label,
+      s.preMoney || 0,
+      s.investment || 0,
+      s.postMoney || 0,
+      s.pricePerShare || 0,
+      s.totalShares,
+      s.newInvestorShares || 0,
+      s.grantShares || 0,
+      s.safeConversionShares || 0,
+    ])
+    ;(s.safeConversions || []).forEach(conversion => {
+      wsT.addRow([
+        `${s.label} SAFE`,
+        conversion.holderName,
+        conversion.investment || 0,
+        conversion.conversionPrice || 0,
+        conversion.shares || 0,
+        conversion.valuationCap || '',
+        conversion.discountPct || 0,
+      ])
+    })
   })
   // Triplet format on stakeholder + totals rows: %, shares, $-value.
   const stakeholderEndRow = 1 + allKeys.length + 1

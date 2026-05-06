@@ -11,14 +11,17 @@ const rounds = [
   { name: 'Series A', preMoneyVal: 30_000_000, investment: 10_000_000, unit: 'M', grantMode: 'shares', grantValue: 250_000 },
 ]
 const employeeReserve = 2_500_000
+const safeInstruments = [
+  { id: 'safe-1', type: 'safe', holderName: 'Angel SAFE', investment: 500_000, valuationCap: 8_000_000, discountPct: 20, mfn: false, proRata: false },
+]
 
-function fixtureWorkbook(preGrant = false) {
-  const states = computeRounds(founders, rounds, employeeReserve, preGrant)
+function fixtureWorkbook(preGrant = false, instruments = []) {
+  const states = computeRounds(founders, rounds, employeeReserve, preGrant, instruments)
   const keys = new Set()
   states.forEach(s => Object.keys(s.ownership).forEach(k => keys.add(k)))
   const allKeys = Array.from(keys)
   return buildWorkbook({
-    founders, employeeReserve, employeesOnCapTablePreGrant: preGrant, rounds, states, allKeys,
+    founders, employeeReserve, employeesOnCapTablePreGrant: preGrant, rounds, instruments, states, allKeys,
   })
 }
 
@@ -46,6 +49,18 @@ describe('buildWorkbook', () => {
     // Round rows: idx, name, preMoneyVal, investment, unit, grantMode, grantValue, resolved
     expect(flat).toContainEqual([1, 'Seed', 16_000_000, 3_100_000, 'M', 'shares', 0, 0])
     expect(flat).toContainEqual([2, 'Series A', 30_000_000, 10_000_000, 'M', 'shares', 250_000, 250_000])
+  })
+
+  it('writes SAFE assumptions and conversion outputs', async () => {
+    const wb = await fixtureWorkbook(false, safeInstruments)
+    const assumptions = []
+    wb.getWorksheet('Assumptions').eachRow({ includeEmpty: true }, row => assumptions.push(row.values.slice(1)))
+    expect(assumptions).toContainEqual(['Angel SAFE', 500_000, 8_000_000, 20, 'No', 'No'])
+
+    const capTable = []
+    wb.getWorksheet('Cap Table').eachRow({ includeEmpty: true }, row => capTable.push(row.values.slice(1)))
+    expect(capTable.some(row => row[0] === 'Angel SAFE')).toBe(true)
+    expect(capTable.some(row => row[0] === 'Seed SAFE' && row[1] === 'Angel SAFE')).toBe(true)
   })
 
   it('applies %, integer, and $-currency number formats to the Cap Table triplet columns', async () => {
