@@ -6,6 +6,7 @@ import {
 import AuthBar from './components/AuthBar.jsx'
 import ScenariosMenu from './components/ScenariosMenu.jsx'
 import { computeRounds, RESERVE_KEY, GRANTED_KEY } from './model/dilutionEngine.js'
+import { createScenarioState, normalizeScenarioState } from './model/scenarioSchema.js'
 
 const ROUND_COLORS = ['#7c6cfc', '#fc6c8f', '#6cfcb8', '#fcb86c', '#6cb8fc', '#fc6cfc']
 
@@ -430,29 +431,40 @@ const CustomTooltip = ({ active, payload, label, mode }) => {
   )
 }
 
+const DEFAULT_SCENARIO_STATE = {
+  founders: DEFAULT_FOUNDERS,
+  employeeReserve: DEFAULT_RESERVE,
+  employeesOnCapTablePreGrant: false,
+  rounds: DEFAULT_ROUNDS,
+  instruments: [],
+}
+
 // localStorage key for the auto-saved anonymous scenario.
 const LOCAL_SCENARIO_KEY = 'dilution-model:current'
 
 // Hydrate from localStorage on first render. Falls back to defaults if missing or malformed.
 function loadInitialScenario() {
-  if (typeof window === 'undefined') return null
+  if (typeof window === 'undefined') return { scenario: createScenarioState(DEFAULT_SCENARIO_STATE), warnings: [] }
   try {
     const raw = localStorage.getItem(LOCAL_SCENARIO_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') return null
-    return parsed
+    if (!raw) return { scenario: createScenarioState(DEFAULT_SCENARIO_STATE), warnings: [] }
+    return normalizeScenarioState(JSON.parse(raw), DEFAULT_SCENARIO_STATE)
   } catch {
-    return null
+    return {
+      scenario: createScenarioState(DEFAULT_SCENARIO_STATE),
+      warnings: ['Saved scenario JSON was malformed; restored defaults.'],
+    }
   }
 }
 
 export default function App({ clerkConfigured = false }) {
   const initial = useMemo(() => loadInitialScenario(), [])
-  const [founders, setFounders] = useState(initial?.founders ?? DEFAULT_FOUNDERS)
-  const [employeeReserve, setEmployeeReserve] = useState(initial?.employeeReserve ?? DEFAULT_RESERVE)
-  const [employeesOnCapTablePreGrant, setEmployeesOnCapTablePreGrant] = useState(initial?.employeesOnCapTablePreGrant ?? false)
-  const [rounds, setRounds] = useState(initial?.rounds ?? DEFAULT_ROUNDS)
+  const [founders, setFounders] = useState(initial.scenario.founders)
+  const [employeeReserve, setEmployeeReserve] = useState(initial.scenario.employeeReserve)
+  const [employeesOnCapTablePreGrant, setEmployeesOnCapTablePreGrant] = useState(initial.scenario.employeesOnCapTablePreGrant)
+  const [rounds, setRounds] = useState(initial.scenario.rounds)
+  const [instruments, setInstruments] = useState(initial.scenario.instruments)
+  const [scenarioWarning, setScenarioWarning] = useState(initial.warnings.join(' '))
   const [activeTab, setActiveTab] = useState('chart')
   const [valueMode, setValueMode] = useState('pct') // 'pct' | 'shares'
 
@@ -460,11 +472,11 @@ export default function App({ clerkConfigured = false }) {
   useEffect(() => {
     try {
       localStorage.setItem(LOCAL_SCENARIO_KEY, JSON.stringify({
-        founders, employeeReserve, employeesOnCapTablePreGrant, rounds,
+        ...createScenarioState({ founders, employeeReserve, employeesOnCapTablePreGrant, rounds, instruments }),
         savedAt: new Date().toISOString(),
       }))
     } catch { /* quota exceeded or private mode — fail silently */ }
-  }, [founders, employeeReserve, employeesOnCapTablePreGrant, rounds])
+  }, [founders, employeeReserve, employeesOnCapTablePreGrant, rounds, instruments])
 
   const states = useMemo(
     () => computeRounds(founders, rounds, employeeReserve, employeesOnCapTablePreGrant),
@@ -657,15 +669,17 @@ export default function App({ clerkConfigured = false }) {
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
           <ScenariosMenu
             clerkConfigured={clerkConfigured}
-            getScenarioState={() => ({
-              founders, employeeReserve, employeesOnCapTablePreGrant, rounds,
+            getScenarioState={() => createScenarioState({
+              founders, employeeReserve, employeesOnCapTablePreGrant, rounds, instruments,
             })}
             applyScenarioState={(data) => {
-              if (!data) return
-              if (Array.isArray(data.founders)) setFounders(data.founders)
-              if (typeof data.employeeReserve === 'number') setEmployeeReserve(data.employeeReserve)
-              if (typeof data.employeesOnCapTablePreGrant === 'boolean') setEmployeesOnCapTablePreGrant(data.employeesOnCapTablePreGrant)
-              if (Array.isArray(data.rounds)) setRounds(data.rounds)
+              const { scenario, warnings } = normalizeScenarioState(data, DEFAULT_SCENARIO_STATE)
+              setFounders(scenario.founders)
+              setEmployeeReserve(scenario.employeeReserve)
+              setEmployeesOnCapTablePreGrant(scenario.employeesOnCapTablePreGrant)
+              setRounds(scenario.rounds)
+              setInstruments(scenario.instruments)
+              setScenarioWarning(warnings.join(' '))
             }}
           />
           <button
@@ -673,7 +687,7 @@ export default function App({ clerkConfigured = false }) {
               const { exportWorkbook } = await import('./lib/exportWorkbook.js')
               const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
               await exportWorkbook(
-                { founders, employeeReserve, employeesOnCapTablePreGrant, rounds, states, allKeys },
+                { founders, employeeReserve, employeesOnCapTablePreGrant, rounds, instruments, states, allKeys },
                 `dilution-model-${ts}.xlsx`,
               )
             }}
@@ -688,6 +702,21 @@ export default function App({ clerkConfigured = false }) {
           <AuthBar clerkConfigured={clerkConfigured} />
         </div>
       </div>
+
+      {scenarioWarning && (
+        <div style={{
+          background: 'rgba(252,184,108,0.10)', borderBottom: '1px solid rgba(252,184,108,0.35)',
+          color: '#fcb86c', padding: '8px 32px', fontSize: 12, fontFamily: 'DM Mono',
+          display: 'flex', justifyContent: 'space-between', gap: 16,
+        }}>
+          <span>{scenarioWarning}</span>
+          <button
+            onClick={() => setScenarioWarning('')}
+            style={{ background: 'none', border: 'none', color: '#fcb86c', cursor: 'pointer', fontSize: 13 }}
+            title="Dismiss scenario warning"
+          >×</button>
+        </div>
+      )}
 
       <div style={{ display: 'flex', minHeight: 'calc(100vh - 69px)' }}>
         {/* Left Panel */}
