@@ -318,7 +318,7 @@ function SafeInstrumentRow({ instrument, index, rounds, onUpdate, onRemove }) {
         <select
           value={instrument.conversionRoundId ?? ''}
           onChange={e => update('conversionRoundId', e.target.value === '' ? null : e.target.value)}
-          style={{ width: '100%', fontSize: 12 }}
+          style={{ fontSize: 12 }}
         >
           <option value="">First priced round</option>
           {rounds.map((round, roundIdx) => (
