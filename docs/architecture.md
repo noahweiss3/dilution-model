@@ -79,4 +79,4 @@ This keeps ExcelJS out of the initial app bundle. `exportWorkbook.js` builds fou
 - `App.jsx` still contains too much UI and should be split into panels/components.
 - Scenario state is versioned and schema-validated; future migrations should extend `src/model/scenarioSchema.js`.
 - Supabase schema/RLS migrations are not yet in repo.
-- SAFE/convertible MVP currently converts all SAFEs in the first priced round; later instrument variants need richer conversion timing/mechanics.
+- SAFE/convertible MVP supports default first-priced-round conversion plus per-instrument `conversionRoundId` timing; later instrument variants need richer mechanics.

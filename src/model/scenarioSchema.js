@@ -54,7 +54,8 @@ function normalizeInstrument(instrument) {
   if (!finiteNumber(instrument.investment) || instrument.investment < 0) return null
   const hasCap = instrument.valuationCap == null || (finiteNumber(instrument.valuationCap) && instrument.valuationCap >= 0)
   const hasDiscount = instrument.discountPct == null || (finiteNumber(instrument.discountPct) && instrument.discountPct >= 0 && instrument.discountPct < 100)
-  if (!hasCap || !hasDiscount) return null
+  const hasConversionRound = instrument.conversionRoundId == null || ['string', 'number'].includes(typeof instrument.conversionRoundId)
+  if (!hasCap || !hasDiscount || !hasConversionRound) return null
 
   return {
     id: instrument.id ?? cryptoSafeId(),
@@ -63,6 +64,7 @@ function normalizeInstrument(instrument) {
     investment: nonNegativeInt(instrument.investment),
     valuationCap: instrument.valuationCap == null ? null : nonNegativeInt(instrument.valuationCap),
     discountPct: instrument.discountPct == null ? 0 : Math.max(0, instrument.discountPct),
+    ...(instrument.conversionRoundId == null || instrument.conversionRoundId === '' ? {} : { conversionRoundId: instrument.conversionRoundId }),
     mfn: Boolean(instrument.mfn),
     proRata: Boolean(instrument.proRata),
   }

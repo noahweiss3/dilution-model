@@ -20,7 +20,7 @@ describe('scenario schema', () => {
       employeeReserve: 250_000,
       employeesOnCapTablePreGrant: true,
       rounds: [{ id: 9, name: 'A', investment: 100, preMoneyVal: 900, unit: 'K', grantMode: 'pct', grantValue: 25, extra: 'ignore' }],
-      instruments: [{ id: 'safe-1', type: 'safe', holderName: 'Angel', investment: 100_000, valuationCap: 5_000_000, discountPct: 20, unknown: true }],
+      instruments: [{ id: 'safe-1', type: 'safe', holderName: 'Angel', investment: 100_000, valuationCap: 5_000_000, discountPct: 20, conversionRoundId: 9, unknown: true }],
       states: [{ computed: true }],
       allKeys: ['computed'],
     })
@@ -31,7 +31,7 @@ describe('scenario schema', () => {
       employeeReserve: 250_000,
       employeesOnCapTablePreGrant: true,
       rounds: [{ id: 9, name: 'A', investment: 100, preMoneyVal: 900, unit: 'K', grantMode: 'pct', grantValue: 25 }],
-      instruments: [{ id: 'safe-1', type: 'safe', holderName: 'Angel', investment: 100_000, valuationCap: 5_000_000, discountPct: 20, mfn: false, proRata: false }],
+      instruments: [{ id: 'safe-1', type: 'safe', holderName: 'Angel', investment: 100_000, valuationCap: 5_000_000, discountPct: 20, conversionRoundId: 9, mfn: false, proRata: false }],
     })
   })
 

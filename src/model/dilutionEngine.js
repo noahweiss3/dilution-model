@@ -34,7 +34,19 @@ function safeConversionForInstrument(instrument, pricedRoundPrice, prevTotalShar
     discountPct: instrument.discountPct || 0,
     conversionPrice,
     shares,
+    conversionRoundId: instrument.conversionRoundId ?? null,
   }
+}
+
+const hasSelectedConversionRound = (instrument) => (
+  instrument?.conversionRoundId !== undefined &&
+  instrument?.conversionRoundId !== null &&
+  instrument?.conversionRoundId !== ''
+)
+
+function shouldConvertInstrumentInRound(instrument, round) {
+  if (!hasSelectedConversionRound(instrument)) return true
+  return String(instrument.conversionRoundId) === String(round.id)
 }
 
 function ownershipFromShares(holderShares, totalShares) {
@@ -58,9 +70,9 @@ function ownershipFromShares(holderShares, totalShares) {
 // Grants per round are capped by the remaining grant budget
 // (reserve - shares already granted in earlier rounds).
 //
-// SAFE/convertible MVP: all SAFE instruments convert in the first priced round
-// using the investor-favorable price among the priced-round price, valuation-cap
-// price, and discount price. Converted SAFE holder share counts then persist
+// SAFE/convertible MVP: by default, SAFE instruments convert in the first priced round
+// where a valid conversion price exists. A SAFE can opt into a specific priced
+// round via `conversionRoundId`; converted SAFE holder share counts then persist
 // through later rounds like any other existing holder.
 export function computeRounds(
   founders,
@@ -88,7 +100,7 @@ export function computeRounds(
   let prevTotal = preFundTotal
   let unallocatedReserve = reserveIssuedUpfront
   let granted = 0
-  let safesConverted = false
+  const convertedSafeIds = new Set()
 
   states.push({
     label: 'Pre-Funding',
@@ -108,12 +120,12 @@ export function computeRounds(
     const pricePerShare = prevTotal > 0 ? preVal / prevTotal : 0
     const newInvestorShares = pricePerShare > 0 ? toShares(invest / pricePerShare) : 0
 
-    const safeConversions = !safesConverted
-      ? instruments
-          .map(instrument => safeConversionForInstrument(instrument, pricePerShare, prevTotal))
-          .filter(Boolean)
-      : []
-    safesConverted = safesConverted || safeConversions.length > 0
+    const safeConversions = instruments
+      .filter(instrument => !convertedSafeIds.has(instrument.id))
+      .filter(instrument => shouldConvertInstrumentInRound(instrument, round))
+      .map(instrument => safeConversionForInstrument(instrument, pricePerShare, prevTotal))
+      .filter(Boolean)
+    safeConversions.forEach(conversion => convertedSafeIds.add(conversion.id))
     const safeConversionShares = safeConversions.reduce((sum, conversion) => sum + conversion.shares, 0)
     safeConversions.forEach(conversion => {
       holderShares[conversion.holderName] = (holderShares[conversion.holderName] || 0) + conversion.shares

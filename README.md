@@ -54,7 +54,7 @@ cp .env.example .env.local
 
 ## Data model notes
 
-The current core model supports priced rounds and employee reserve/grants. SAFE/convertible instrument support is planned but not yet implemented.
+The current core model supports priced rounds, employee reserve/grants, and SAFE/convertible instruments. SAFEs convert in the first priced round by default, or in a user-selected priced round when `conversionRoundId` is set.
 
 Core financial logic lives in `src/model/dilutionEngine.js`. UI code should consume this module rather than duplicating formulas in React components.
 

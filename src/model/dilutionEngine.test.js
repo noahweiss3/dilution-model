@@ -258,6 +258,56 @@ describe('SAFE conversions', () => {
     expect(Math.round(seriesA.ownership['Fund SAFE'] * seriesA.totalShares)).toBe(500_000)
     expect(seriesA.safeConversionShares).toBe(0)
   })
+
+  it('converts a SAFE in its selected priced round instead of the first possible round', () => {
+    const states = computeRounds(
+      oneFounder(),
+      [
+        { id: 'seed', name: 'Seed', preMoneyVal: 10_000_000, investment: 2_000_000, grantMode: 'shares', grantValue: 0 },
+        { id: 'series-a', name: 'Series A', preMoneyVal: 24_000_000, investment: 6_000_000, grantMode: 'shares', grantValue: 0 },
+      ],
+      0,
+      false,
+      [{
+        id: 'safe-1',
+        type: 'safe',
+        holderName: 'Delayed SAFE',
+        investment: 500_000,
+        valuationCap: null,
+        discountPct: 0,
+        conversionRoundId: 'series-a',
+      }],
+    )
+
+    const seed = states[1]
+    const seriesA = states[2]
+    expect(seed.safeConversionShares).toBe(0)
+    expect(seed.ownership['Delayed SAFE']).toBeUndefined()
+    expect(seriesA.safeConversionShares).toBe(250_000)
+    expect(seriesA.safeConversions[0]).toMatchObject({
+      holderName: 'Delayed SAFE',
+      shares: 250_000,
+      conversionPrice: 2,
+      conversionRoundId: 'series-a',
+    })
+    expect(seriesA.ownership['Delayed SAFE']).toBeCloseTo(250_000 / seriesA.totalShares, 12)
+  })
+
+  it('continues converting unspecified SAFEs in the first priced round', () => {
+    const states = computeRounds(
+      oneFounder(),
+      [
+        { id: 'seed', name: 'Seed', preMoneyVal: 10_000_000, investment: 2_000_000, grantMode: 'shares', grantValue: 0 },
+        { id: 'series-a', name: 'Series A', preMoneyVal: 24_000_000, investment: 6_000_000, grantMode: 'shares', grantValue: 0 },
+      ],
+      0,
+      false,
+      [{ id: 'safe-1', type: 'safe', holderName: 'Default SAFE', investment: 500_000, valuationCap: null, discountPct: 0 }],
+    )
+
+    expect(states[1].safeConversionShares).toBe(500_000)
+    expect(states[2].safeConversionShares).toBe(0)
+  })
 })
 
 describe('round invariants', () => {

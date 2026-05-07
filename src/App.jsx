@@ -282,7 +282,7 @@ function RoundRow({ round, onUpdate, onPatch, onRemove, index, dragHandlers, isD
   )
 }
 
-function SafeInstrumentRow({ instrument, index, onUpdate, onRemove }) {
+function SafeInstrumentRow({ instrument, index, rounds, onUpdate, onRemove }) {
   const update = (field, val) => onUpdate(index, field, val)
   return (
     <div style={{
@@ -313,8 +313,21 @@ function SafeInstrumentRow({ instrument, index, onUpdate, onRemove }) {
           <NumberInput value={instrument.discountPct || 0} onChange={v => update('discountPct', Math.max(0, Math.min(99, v)))} decimals={1} allowDecimal placeholder="0" />
         </div>
       </div>
+      <div style={{ marginTop: 8 }}>
+        <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 10, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Conversion Round</label>
+        <select
+          value={instrument.conversionRoundId ?? ''}
+          onChange={e => update('conversionRoundId', e.target.value === '' ? null : e.target.value)}
+          style={{ width: '100%', fontSize: 12 }}
+        >
+          <option value="">First priced round</option>
+          {rounds.map((round, roundIdx) => (
+            <option key={round.id ?? roundIdx} value={round.id}>{round.name || `Round ${roundIdx + 1}`}</option>
+          ))}
+        </select>
+      </div>
       <div style={{ marginTop: 6, fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.4 }}>
-        Converts in the first priced round at the best available price: round price, valuation cap, or discount.
+        Converts in {instrument.conversionRoundId ? 'the selected priced round' : 'the first priced round'} at the best available price: round price, valuation cap, or discount.
       </div>
     </div>
   )
@@ -629,6 +642,7 @@ export default function App({ clerkConfigured = false }) {
     investment: 250000,
     valuationCap: null,
     discountPct: 0,
+    conversionRoundId: null,
     mfn: false,
     proRata: false,
   }])
@@ -927,13 +941,14 @@ export default function App({ clerkConfigured = false }) {
                 borderRadius: 6, padding: '10px 12px', color: 'var(--text-dim)',
                 fontSize: 11, lineHeight: 1.4,
               }}>
-                Add SAFEs to convert them in the first priced round. Valuation cap and discount are optional.
+                Add SAFEs to convert them in the first priced round by default, or choose a later priced round. Valuation cap and discount are optional.
               </div>
             ) : instruments.map((instrument, idx) => (
               <SafeInstrumentRow
                 key={instrument.id}
                 instrument={instrument}
                 index={idx}
+                rounds={rounds}
                 onUpdate={updateInstrument}
                 onRemove={removeInstrument}
               />

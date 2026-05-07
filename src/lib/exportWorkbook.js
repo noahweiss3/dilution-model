@@ -37,7 +37,7 @@ export async function buildWorkbook({
   })
   wsA.addRow([])
   wsA.addRow(['SAFE / CONVERTIBLES'])
-  wsA.addRow(['Holder', 'Investment ($)', 'Valuation Cap ($)', 'Discount %', 'MFN', 'Pro Rata'])
+  wsA.addRow(['Holder', 'Investment ($)', 'Valuation Cap ($)', 'Discount %', 'Conversion Round', 'MFN', 'Pro Rata'])
   if (instruments.length === 0) {
     wsA.addRow(['None'])
   } else {
@@ -47,6 +47,9 @@ export async function buildWorkbook({
         instrument.investment || 0,
         instrument.valuationCap || '',
         instrument.discountPct || 0,
+        instrument.conversionRoundId == null || instrument.conversionRoundId === ''
+          ? 'First priced round'
+          : rounds.find(round => String(round.id) === String(instrument.conversionRoundId))?.name || 'Unknown round',
         instrument.mfn ? 'Yes' : 'No',
         instrument.proRata ? 'Yes' : 'No',
       ])

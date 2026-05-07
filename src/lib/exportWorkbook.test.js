@@ -55,7 +55,7 @@ describe('buildWorkbook', () => {
     const wb = await fixtureWorkbook(false, safeInstruments)
     const assumptions = []
     wb.getWorksheet('Assumptions').eachRow({ includeEmpty: true }, row => assumptions.push(row.values.slice(1)))
-    expect(assumptions).toContainEqual(['Angel SAFE', 500_000, 8_000_000, 20, 'No', 'No'])
+    expect(assumptions).toContainEqual(['Angel SAFE', 500_000, 8_000_000, 20, 'First priced round', 'No', 'No'])
 
     const capTable = []
     wb.getWorksheet('Cap Table').eachRow({ includeEmpty: true }, row => capTable.push(row.values.slice(1)))

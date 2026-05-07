@@ -114,9 +114,10 @@ The v1 scenario schema supports SAFE instruments with:
 - `investment`
 - `valuationCap` (optional; `null`/0 means uncapped)
 - `discountPct` (optional; 0 means no discount)
+- `conversionRoundId` (optional; when blank, convert at the first priced round with a valid conversion price)
 - `mfn` and `proRata` metadata (stored/exported, not modeled economically yet)
 
-All SAFEs currently convert in the first priced round. The priced round price is computed from the pre-SAFE previous total share count:
+By default, SAFEs convert in the first priced round. If `conversionRoundId` is set, the SAFE waits and converts only in the matching priced round. The priced round price is computed from the pre-SAFE previous total share count for the actual conversion round:
 
 ```text
 pricedRoundPrice = preMoney / previousTotalShares
@@ -135,7 +136,7 @@ conversionPrice = min(candidatePrices)
 safeShares = round(investment / conversionPrice)
 ```
 
-SAFE conversion shares are added to the first priced-round total share count alongside the priced investor shares and any grant-issued employee shares:
+SAFE conversion shares are added to the selected conversion round's total share count alongside the priced investor shares and any grant-issued employee shares:
 
 ```text
 newTotalShares = previousTotalShares + safeConversionShares + newInvestorShares [+ grantShares]
@@ -145,6 +146,5 @@ Converted SAFE holders then keep fixed absolute share counts and dilute through 
 
 Current limitations:
 
-- Conversion happens only in the first priced round.
 - MFN/pro-rata fields are informational only.
 - Pre-money vs post-money SAFE variants, option-pool shuffles, interest, maturity dates, and note-specific mechanics are not modeled.
