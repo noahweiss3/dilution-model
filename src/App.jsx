@@ -3,9 +3,10 @@ import {
   AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, BarChart, Bar, Cell, Legend
 } from 'recharts'
-import * as XLSX from 'xlsx'
 import AuthBar from './components/AuthBar.jsx'
 import ScenariosMenu from './components/ScenariosMenu.jsx'
+import { computeRounds, RESERVE_KEY, GRANTED_KEY } from './model/dilutionEngine.js'
+import { createScenarioState, normalizeScenarioState } from './model/scenarioSchema.js'
 
 const ROUND_COLORS = ['#7c6cfc', '#fc6c8f', '#6cfcb8', '#fcb86c', '#6cb8fc', '#fc6cfc']
 
@@ -115,122 +116,6 @@ function fmt(n) {
 
 function pct(n) {
   return `${(n * 100).toFixed(2)}%`
-}
-
-const RESERVE_KEY = 'Employee Reserve (Unallocated)'
-const GRANTED_KEY = 'Employees (Granted)'
-
-function computeRounds(founders, rounds, employeeReserve = 0, employeesOnCapTablePreGrant = true) {
-  const founderTotal = founders.reduce((s, f) => s + (f.shares || 0), 0)
-  const reserveCap = Math.max(0, Math.round(employeeReserve || 0))
-
-  // Two modes:
-  //   preGrant=true  → entire reserve is issued upfront and dilutes everyone now; grants
-  //                    transfer from "Unallocated" to "Granted" (no new shares issued).
-  //   preGrant=false → reserve is just a budget cap; granting issues NEW shares each round
-  //                    (dilutes everyone at grant time). No "Unallocated" bucket on the cap table.
-  const reserveIssuedUpfront = employeesOnCapTablePreGrant ? reserveCap : 0
-  const preFundTotal = founderTotal + reserveIssuedUpfront
-
-  let states = []
-  let prevTotal = preFundTotal
-  let unallocatedReserve = reserveIssuedUpfront
-  let granted = 0
-
-  // Pre-funding state
-  const preFund = {
-    label: 'Pre-Funding',
-    totalShares: preFundTotal,
-    ownership: {},
-    postMoney: null,
-    preMoney: null,
-    newInvestors: 0,
-    roundIdx: -1,
-  }
-  founders.forEach(f => {
-    preFund.ownership[f.name] = preFundTotal > 0 ? f.shares / preFundTotal : 0
-  })
-  if (employeesOnCapTablePreGrant && reserveIssuedUpfront > 0) {
-    preFund.ownership[RESERVE_KEY] = reserveIssuedUpfront / preFundTotal
-  }
-  states.push(preFund)
-
-  rounds.forEach((round, idx) => {
-    const preVal = round.preMoneyVal || 0
-    const invest = round.investment || 0
-    const postVal = preVal + invest
-
-    const pricePerShare = prevTotal > 0 ? preVal / prevTotal : 0
-    const newInvestorShares = pricePerShare > 0 ? Math.round(invest / pricePerShare) : 0
-
-    // Resolve grant for this round.
-    let grantShares = 0
-    if (round.grantMode === 'pct') {
-      const pct = (round.grantValue || 0) / 100
-      grantShares = Math.round(pct * reserveCap)
-    } else {
-      grantShares = Math.round(round.grantValue || 0)
-    }
-    // Cap by remaining grant budget (total reserve - already-granted).
-    const grantBudgetRemaining = Math.max(0, reserveCap - granted)
-    grantShares = Math.max(0, Math.min(grantShares, grantBudgetRemaining))
-
-    let newTotal
-    if (employeesOnCapTablePreGrant) {
-      // Grant transfers from unallocated to granted; total only grows from investor issuance.
-      newTotal = prevTotal + newInvestorShares
-      unallocatedReserve -= grantShares
-      granted += grantShares
-    } else {
-      // Grant issues new shares this round, alongside investor shares.
-      newTotal = prevTotal + newInvestorShares + grantShares
-      granted += grantShares
-    }
-
-    const state = {
-      label: round.name,
-      totalShares: newTotal,
-      preMoney: preVal,
-      postMoney: postVal,
-      pricePerShare,
-      investment: invest,
-      newInvestorShares,
-      grantShares,
-      roundIdx: idx,
-      ownership: {},
-    }
-
-    // Founders dilute proportionally to total share growth.
-    founders.forEach(f => {
-      const prevState = states[states.length - 1]
-      const founderShareCount = Math.round((prevState.ownership[f.name] || 0) * prevState.totalShares)
-      state.ownership[f.name] = founderShareCount / newTotal
-    })
-
-    // Investors from previous rounds — keep absolute shares, dilute by new total.
-    states.forEach((s, si) => {
-      if (si === 0) return
-      const key = s.label
-      const prevInvShares = Math.round((states[states.length - 1].ownership[key] || 0) * prevTotal)
-      state.ownership[key] = prevInvShares / newTotal
-    })
-
-    // New investors this round.
-    state.ownership[round.name] = newInvestorShares / newTotal
-
-    // Employee buckets.
-    if (employeesOnCapTablePreGrant) {
-      if (unallocatedReserve > 0) state.ownership[RESERVE_KEY] = unallocatedReserve / newTotal
-      if (granted > 0) state.ownership[GRANTED_KEY] = granted / newTotal
-    } else {
-      if (granted > 0) state.ownership[GRANTED_KEY] = granted / newTotal
-    }
-
-    prevTotal = newTotal
-    states.push(state)
-  })
-
-  return states
 }
 
 function RoundRow({ round, onUpdate, onPatch, onRemove, index, dragHandlers, isDragging, isDragOver, roundState, prevState, reserveCap }) {
@@ -397,6 +282,57 @@ function RoundRow({ round, onUpdate, onPatch, onRemove, index, dragHandlers, isD
   )
 }
 
+function SafeInstrumentRow({ instrument, index, rounds, onUpdate, onRemove }) {
+  const update = (field, val) => onUpdate(index, field, val)
+  return (
+    <div style={{
+      background: 'var(--bg-card)', border: '1px solid var(--border)',
+      borderRadius: 6, padding: '10px 12px', marginBottom: 8,
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+        <input
+          type="text"
+          value={instrument.holderName}
+          onChange={e => update('holderName', e.target.value)}
+          style={{ flex: 1, background: 'transparent', border: 'none', borderBottom: '1px solid var(--border-accent)', borderRadius: 0, padding: '2px 0', fontFamily: 'Syne', fontWeight: 600 }}
+          placeholder={`SAFE Holder ${index + 1}`}
+        />
+        <button onClick={() => onRemove(index)} style={{ background: 'none', border: 'none', color: 'var(--text-dim)', fontSize: 16, cursor: 'pointer' }}>×</button>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+        <div>
+          <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 10, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Investment ($)</label>
+          <NumberInput value={instrument.investment || 0} onChange={v => update('investment', Math.max(0, v))} placeholder="0" />
+        </div>
+        <div>
+          <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 10, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Val. Cap ($)</label>
+          <NumberInput value={instrument.valuationCap || 0} onChange={v => update('valuationCap', v > 0 ? Math.max(0, v) : null)} placeholder="Uncapped" />
+        </div>
+        <div>
+          <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 10, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Discount %</label>
+          <NumberInput value={instrument.discountPct || 0} onChange={v => update('discountPct', Math.max(0, Math.min(99, v)))} decimals={1} allowDecimal placeholder="0" />
+        </div>
+      </div>
+      <div style={{ marginTop: 8 }}>
+        <label style={{ display: 'block', color: 'var(--text-muted)', fontSize: 10, marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.06em' }}>Conversion Round</label>
+        <select
+          value={instrument.conversionRoundId ?? ''}
+          onChange={e => update('conversionRoundId', e.target.value === '' ? null : e.target.value)}
+          style={{ fontSize: 12 }}
+        >
+          <option value="">First priced round</option>
+          {rounds.map((round, roundIdx) => (
+            <option key={round.id ?? roundIdx} value={round.id}>{round.name || `Round ${roundIdx + 1}`}</option>
+          ))}
+        </select>
+      </div>
+      <div style={{ marginTop: 6, fontSize: 10, color: 'var(--text-dim)', lineHeight: 1.4 }}>
+        Converts in {instrument.conversionRoundId ? 'the selected priced round' : 'the first priced round'} at the best available price: round price, valuation cap, or discount.
+      </div>
+    </div>
+  )
+}
+
 function ScaleButton({ currentTotal, onScale, disabled }) {
   const [open, setOpen] = useState(false)
   const [target, setTarget] = useState(currentTotal || 10000000)
@@ -546,141 +482,12 @@ const CustomTooltip = ({ active, payload, label, mode }) => {
   )
 }
 
-function buildExportWorkbook({ founders, employeeReserve, employeesOnCapTablePreGrant, rounds, states, allKeys }) {
-  const wb = XLSX.utils.book_new()
-
-  // ─── Assumptions sheet ────────────────────────────────────────────────
-  // All inputs to the model: founders, employee reserve, rounds.
-  const assumptions = []
-  assumptions.push(['DILUTION MODEL — ASSUMPTIONS'])
-  assumptions.push([`Exported: ${new Date().toISOString()}`])
-  assumptions.push([])
-  assumptions.push(['INITIAL CAP TABLE'])
-  assumptions.push(['Founder', 'Shares', '% of Founders'])
-  const founderTotal = founders.reduce((s, f) => s + (f.shares || 0), 0) || 1
-  founders.forEach(f => {
-    assumptions.push([f.name, f.shares || 0, (f.shares || 0) / founderTotal])
-  })
-  assumptions.push(['TOTAL FOUNDER SHARES', founderTotal, 1])
-  assumptions.push([])
-  assumptions.push(['EMPLOYEE RESERVE'])
-  assumptions.push(['Reserved Shares', employeeReserve])
-  assumptions.push(['Reserve on cap table before grants?', employeesOnCapTablePreGrant ? 'Yes' : 'No'])
-  assumptions.push([])
-  assumptions.push(['FUNDING ROUNDS'])
-  assumptions.push(['#', 'Round Name', 'Pre-Money Val ($)', 'Investment ($)', 'Display Unit', 'Grant Mode', 'Grant Value', 'Grant Shares Resolved'])
-  rounds.forEach((r, i) => {
-    const grantShares = r.grantMode === 'pct'
-      ? Math.round(((r.grantValue || 0) / 100) * (employeeReserve || 0))
-      : (r.grantValue || 0)
-    assumptions.push([
-      i + 1, r.name, r.preMoneyVal || 0, r.investment || 0, r.unit || 'K',
-      r.grantMode || 'shares', r.grantValue || 0, grantShares,
-    ])
-  })
-
-  const wsAssumptions = XLSX.utils.aoa_to_sheet(assumptions)
-  // Reasonable column widths
-  wsAssumptions['!cols'] = [
-    { wch: 32 }, { wch: 22 }, { wch: 20 }, { wch: 20 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 22 },
-  ]
-  XLSX.utils.book_append_sheet(wb, wsAssumptions, 'Assumptions')
-
-  // ─── Cap Table sheet (mirrors the Table tab) ──────────────────────────
-  // Rows: stakeholders. Cols: each round state. Values in % AND share count.
-  const tableHeader = ['Stakeholder', ...states.flatMap(s => [`${s.label} — %`, `${s.label} — Shares`, `${s.label} — Value ($)`])]
-  const tableRows = [tableHeader]
-  allKeys.forEach(key => {
-    const row = [key]
-    states.forEach(s => {
-      const pct = s.ownership[key]
-      if (pct === undefined) { row.push('', '', ''); return }
-      const shares = Math.round(pct * s.totalShares)
-      const value = s.postMoney ? pct * s.postMoney : ''
-      row.push(pct, shares, value)
-    })
-    tableRows.push(row)
-  })
-  // Totals row
-  const totalsRow = ['TOTAL']
-  states.forEach(s => {
-    const totalPct = Object.values(s.ownership).reduce((sum, v) => sum + (v || 0), 0)
-    totalsRow.push(totalPct, s.totalShares, s.postMoney || '')
-  })
-  tableRows.push(totalsRow)
-  // Round metadata at the bottom
-  tableRows.push([])
-  tableRows.push(['Round', 'Pre-Money', 'Investment', 'Post-Money', 'Price/Share', 'Total Shares', 'New Investor Shares', 'Grant Shares'])
-  states.slice(1).forEach(s => {
-    tableRows.push([s.label, s.preMoney || 0, s.investment || 0, s.postMoney || 0, s.pricePerShare || 0, s.totalShares, s.newInvestorShares || 0, s.grantShares || 0])
-  })
-
-  const wsTable = XLSX.utils.aoa_to_sheet(tableRows)
-  // Apply % format to the % columns and currency format to value/$ cols.
-  const range = XLSX.utils.decode_range(wsTable['!ref'])
-  for (let R = 1; R <= range.e.r; R++) {
-    for (let C = 1; C <= range.e.c; C++) {
-      const cell = wsTable[XLSX.utils.encode_cell({ r: R, c: C })]
-      if (!cell || typeof cell.v !== 'number') continue
-      // Triplet pattern: %, shares, value (cols 1,2,3 then 4,5,6 ...)
-      const tripletPos = (C - 1) % 3
-      if (tripletPos === 0) cell.z = '0.00%'
-      else if (tripletPos === 1) cell.z = '#,##0'
-      else if (tripletPos === 2) cell.z = '"$"#,##0'
-    }
-  }
-  wsTable['!cols'] = [{ wch: 28 }, ...Array(range.e.c).fill({ wch: 14 })]
-  XLSX.utils.book_append_sheet(wb, wsTable, 'Cap Table')
-
-  // ─── Chart Data sheet (matches the Chart tab data) ────────────────────
-  // Long format: one row per (round state, stakeholder).
-  const chartRows = [['Round', 'Stakeholder', '% Ownership', 'Shares']]
-  states.forEach(s => {
-    allKeys.forEach(key => {
-      const pct = s.ownership[key]
-      if (pct === undefined) return
-      chartRows.push([s.label, key, pct, Math.round(pct * s.totalShares)])
-    })
-  })
-  const wsChart = XLSX.utils.aoa_to_sheet(chartRows)
-  const chartRange = XLSX.utils.decode_range(wsChart['!ref'])
-  for (let R = 1; R <= chartRange.e.r; R++) {
-    const pctCell = wsChart[XLSX.utils.encode_cell({ r: R, c: 2 })]
-    if (pctCell) pctCell.z = '0.00%'
-    const shCell = wsChart[XLSX.utils.encode_cell({ r: R, c: 3 })]
-    if (shCell) shCell.z = '#,##0'
-  }
-  wsChart['!cols'] = [{ wch: 18 }, { wch: 28 }, { wch: 14 }, { wch: 14 }]
-  XLSX.utils.book_append_sheet(wb, wsChart, 'Chart Data')
-
-  // ─── Waterfall sheet ──────────────────────────────────────────────────
-  // Per-round pre-money / investment / post-money + per-founder value at each round.
-  const wfHeader = ['Round', 'Pre-Money ($)', 'Investment ($)', 'Post-Money ($)', ...founders.map(f => `${f.name} value ($)`)]
-  const wfRows = [wfHeader]
-  states.slice(1).forEach(s => {
-    const row = [s.label, s.preMoney || 0, s.investment || 0, s.postMoney || 0]
-    founders.forEach(f => {
-      const ownPct = s.ownership[f.name] || 0
-      row.push(s.postMoney ? ownPct * s.postMoney : '')
-    })
-    wfRows.push(row)
-  })
-  const wsWf = XLSX.utils.aoa_to_sheet(wfRows)
-  const wfRange = XLSX.utils.decode_range(wsWf['!ref'])
-  for (let R = 1; R <= wfRange.e.r; R++) {
-    for (let C = 1; C <= wfRange.e.c; C++) {
-      const cell = wsWf[XLSX.utils.encode_cell({ r: R, c: C })]
-      if (cell && typeof cell.v === 'number') cell.z = '"$"#,##0'
-    }
-  }
-  wsWf['!cols'] = [{ wch: 16 }, ...Array(wfRange.e.c).fill({ wch: 18 })]
-  XLSX.utils.book_append_sheet(wb, wsWf, 'Waterfall')
-
-  return wb
-}
-
-function downloadXlsx(wb, filename) {
-  XLSX.writeFile(wb, filename)
+const DEFAULT_SCENARIO_STATE = {
+  founders: DEFAULT_FOUNDERS,
+  employeeReserve: DEFAULT_RESERVE,
+  employeesOnCapTablePreGrant: false,
+  rounds: DEFAULT_ROUNDS,
+  instruments: [],
 }
 
 // localStorage key for the auto-saved anonymous scenario.
@@ -688,24 +495,27 @@ const LOCAL_SCENARIO_KEY = 'dilution-model:current'
 
 // Hydrate from localStorage on first render. Falls back to defaults if missing or malformed.
 function loadInitialScenario() {
-  if (typeof window === 'undefined') return null
+  if (typeof window === 'undefined') return { scenario: createScenarioState(DEFAULT_SCENARIO_STATE), warnings: [] }
   try {
     const raw = localStorage.getItem(LOCAL_SCENARIO_KEY)
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    if (!parsed || typeof parsed !== 'object') return null
-    return parsed
+    if (!raw) return { scenario: createScenarioState(DEFAULT_SCENARIO_STATE), warnings: [] }
+    return normalizeScenarioState(JSON.parse(raw), DEFAULT_SCENARIO_STATE)
   } catch {
-    return null
+    return {
+      scenario: createScenarioState(DEFAULT_SCENARIO_STATE),
+      warnings: ['Saved scenario JSON was malformed; restored defaults.'],
+    }
   }
 }
 
 export default function App({ clerkConfigured = false }) {
   const initial = useMemo(() => loadInitialScenario(), [])
-  const [founders, setFounders] = useState(initial?.founders ?? DEFAULT_FOUNDERS)
-  const [employeeReserve, setEmployeeReserve] = useState(initial?.employeeReserve ?? DEFAULT_RESERVE)
-  const [employeesOnCapTablePreGrant, setEmployeesOnCapTablePreGrant] = useState(initial?.employeesOnCapTablePreGrant ?? false)
-  const [rounds, setRounds] = useState(initial?.rounds ?? DEFAULT_ROUNDS)
+  const [founders, setFounders] = useState(initial.scenario.founders)
+  const [employeeReserve, setEmployeeReserve] = useState(initial.scenario.employeeReserve)
+  const [employeesOnCapTablePreGrant, setEmployeesOnCapTablePreGrant] = useState(initial.scenario.employeesOnCapTablePreGrant)
+  const [rounds, setRounds] = useState(initial.scenario.rounds)
+  const [instruments, setInstruments] = useState(initial.scenario.instruments)
+  const [scenarioWarning, setScenarioWarning] = useState(initial.warnings.join(' '))
   const [activeTab, setActiveTab] = useState('chart')
   const [valueMode, setValueMode] = useState('pct') // 'pct' | 'shares'
 
@@ -713,15 +523,15 @@ export default function App({ clerkConfigured = false }) {
   useEffect(() => {
     try {
       localStorage.setItem(LOCAL_SCENARIO_KEY, JSON.stringify({
-        founders, employeeReserve, employeesOnCapTablePreGrant, rounds,
+        ...createScenarioState({ founders, employeeReserve, employeesOnCapTablePreGrant, rounds, instruments }),
         savedAt: new Date().toISOString(),
       }))
     } catch { /* quota exceeded or private mode — fail silently */ }
-  }, [founders, employeeReserve, employeesOnCapTablePreGrant, rounds])
+  }, [founders, employeeReserve, employeesOnCapTablePreGrant, rounds, instruments])
 
   const states = useMemo(
-    () => computeRounds(founders, rounds, employeeReserve, employeesOnCapTablePreGrant),
-    [founders, rounds, employeeReserve, employeesOnCapTablePreGrant]
+    () => computeRounds(founders, rounds, employeeReserve, employeesOnCapTablePreGrant, instruments),
+    [founders, rounds, employeeReserve, employeesOnCapTablePreGrant, instruments]
   )
 
   const chartData = states.map(state => {
@@ -825,6 +635,22 @@ export default function App({ clerkConfigured = false }) {
   const updateFounder = (idx, field, val) => setFounders(founders.map((f, i) => i === idx ? { ...f, [field]: val } : f))
   const removeFounder = (idx) => setFounders(founders.filter((_, i) => i !== idx))
 
+  const addInstrument = () => setInstruments([...instruments, {
+    id: Date.now(),
+    type: 'safe',
+    holderName: `SAFE Holder ${instruments.length + 1}`,
+    investment: 250000,
+    valuationCap: null,
+    discountPct: 0,
+    conversionRoundId: null,
+    mfn: false,
+    proRata: false,
+  }])
+  const updateInstrument = (idx, field, val) => setInstruments(instruments.map((instrument, i) => (
+    i === idx ? { ...instrument, [field]: val } : instrument
+  )))
+  const removeInstrument = (idx) => setInstruments(instruments.filter((_, i) => i !== idx))
+
   const equalizeFounders = () => {
     if (founders.length === 0) return
     const total = founders.reduce((s, f) => s + (f.shares || 0), 0)
@@ -910,24 +736,27 @@ export default function App({ clerkConfigured = false }) {
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
           <ScenariosMenu
             clerkConfigured={clerkConfigured}
-            getScenarioState={() => ({
-              founders, employeeReserve, employeesOnCapTablePreGrant, rounds,
+            getScenarioState={() => createScenarioState({
+              founders, employeeReserve, employeesOnCapTablePreGrant, rounds, instruments,
             })}
             applyScenarioState={(data) => {
-              if (!data) return
-              if (Array.isArray(data.founders)) setFounders(data.founders)
-              if (typeof data.employeeReserve === 'number') setEmployeeReserve(data.employeeReserve)
-              if (typeof data.employeesOnCapTablePreGrant === 'boolean') setEmployeesOnCapTablePreGrant(data.employeesOnCapTablePreGrant)
-              if (Array.isArray(data.rounds)) setRounds(data.rounds)
+              const { scenario, warnings } = normalizeScenarioState(data, DEFAULT_SCENARIO_STATE)
+              setFounders(scenario.founders)
+              setEmployeeReserve(scenario.employeeReserve)
+              setEmployeesOnCapTablePreGrant(scenario.employeesOnCapTablePreGrant)
+              setRounds(scenario.rounds)
+              setInstruments(scenario.instruments)
+              setScenarioWarning(warnings.join(' '))
             }}
           />
           <button
-            onClick={() => {
-              const wb = buildExportWorkbook({
-                founders, employeeReserve, employeesOnCapTablePreGrant, rounds, states, allKeys,
-              })
+            onClick={async () => {
+              const { exportWorkbook } = await import('./lib/exportWorkbook.js')
               const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-              downloadXlsx(wb, `dilution-model-${ts}.xlsx`)
+              await exportWorkbook(
+                { founders, employeeReserve, employeesOnCapTablePreGrant, rounds, instruments, states, allKeys },
+                `dilution-model-${ts}.xlsx`,
+              )
             }}
             title="Download a snapshot of all inputs and computed cap-table data as .xlsx"
             style={{
@@ -940,6 +769,21 @@ export default function App({ clerkConfigured = false }) {
           <AuthBar clerkConfigured={clerkConfigured} />
         </div>
       </div>
+
+      {scenarioWarning && (
+        <div style={{
+          background: 'rgba(252,184,108,0.10)', borderBottom: '1px solid rgba(252,184,108,0.35)',
+          color: '#fcb86c', padding: '8px 32px', fontSize: 12, fontFamily: 'DM Mono',
+          display: 'flex', justifyContent: 'space-between', gap: 16,
+        }}>
+          <span>{scenarioWarning}</span>
+          <button
+            onClick={() => setScenarioWarning('')}
+            style={{ background: 'none', border: 'none', color: '#fcb86c', cursor: 'pointer', fontSize: 13 }}
+            title="Dismiss scenario warning"
+          >×</button>
+        </div>
+      )}
 
       <div style={{ display: 'flex', minHeight: 'calc(100vh - 69px)' }}>
         {/* Left Panel */}
@@ -1073,6 +917,47 @@ export default function App({ clerkConfigured = false }) {
                 ) : null
               })()}
             </div>
+          </div>
+
+          {/* Convertible Instruments */}
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+              <span style={{ fontFamily: 'Syne', fontWeight: 700, fontSize: 11, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--text-muted)' }}>
+                SAFE / Convertibles
+              </span>
+              <button
+                onClick={addInstrument}
+                style={{
+                  background: 'var(--accent-dim)', border: '1px solid var(--accent)',
+                  color: 'var(--accent)', fontSize: 11, borderRadius: 4,
+                  padding: '3px 10px', letterSpacing: '0.05em',
+                  fontFamily: 'DM Mono', cursor: 'pointer',
+                }}
+              >+ SAFE</button>
+            </div>
+            {instruments.length === 0 ? (
+              <div style={{
+                background: 'var(--bg-card)', border: '1px dashed var(--border)',
+                borderRadius: 6, padding: '10px 12px', color: 'var(--text-dim)',
+                fontSize: 11, lineHeight: 1.4,
+              }}>
+                Add SAFEs to convert them in the first priced round by default, or choose a later priced round. Valuation cap and discount are optional.
+              </div>
+            ) : instruments.map((instrument, idx) => (
+              <SafeInstrumentRow
+                key={instrument.id}
+                instrument={instrument}
+                index={idx}
+                rounds={rounds}
+                onUpdate={updateInstrument}
+                onRemove={removeInstrument}
+              />
+            ))}
+            {states.some(s => s.safeConversionShares > 0) && (
+              <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)', fontFamily: 'DM Mono' }}>
+                Converted SAFE shares: <span style={{ color: 'var(--accent)' }}>{states.reduce((sum, s) => sum + (s.safeConversionShares || 0), 0).toLocaleString()}</span>
+              </div>
+            )}
           </div>
 
           {/* Rounds */}
