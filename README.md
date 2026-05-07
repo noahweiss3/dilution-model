@@ -13,18 +13,28 @@ Interactive equity dilution modeling tool for multiple funding rounds.
 
 ## Deploy to Vercel
 
+### PR previews
+
+This repo includes `vercel.json` for Vercel's GitHub integration. After importing the repo in Vercel and setting `main` as the Production Branch, each pull request gets its own Preview Deployment URL before merge. Merging to `main` creates the production deployment.
+
+See `docs/vercel-pr-previews.md` for the one-time dashboard setup and branch protection recommendations.
+
 ### Option 1: Vercel CLI
 ```bash
 npm i -g vercel
 npm install
+npm run build
 vercel
 ```
 
 ### Option 2: GitHub + Vercel Dashboard
 1. Push this folder to a GitHub repo
 2. Go to [vercel.com](https://vercel.com) → New Project
-3. Import your repo — Vercel auto-detects Vite
-4. Click Deploy
+3. Import your repo — Vercel uses `vercel.json` for Vite build settings
+4. Set Production Branch to `main`
+5. Configure optional env vars for Clerk/Supabase
+6. Use PR Preview Deployment URLs for review before merge
+7. Merge to `main` to deploy production
 
 ## Local Dev
 ```bash
