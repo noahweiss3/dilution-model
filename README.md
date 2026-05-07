@@ -60,6 +60,12 @@ Core financial logic lives in `src/model/dilutionEngine.js`. UI code should cons
 
 ## Deployment
 
+### Vercel PR previews
+
+This repo includes `vercel.json` for Vercel's GitHub integration. After importing the repo in Vercel and setting `main` as the Production Branch, each pull request gets its own Preview Deployment URL before merge. Merging to `main` creates the production deployment.
+
+See `docs/vercel-pr-previews.md` for the one-time dashboard setup and branch protection recommendations.
+
 ### Vercel CLI
 
 ```bash
@@ -72,5 +78,7 @@ vercel
 
 1. Push the repo to GitHub.
 2. Import the project in Vercel.
-3. Configure optional env vars for Clerk/Supabase.
-4. Deploy.
+3. Set Production Branch to `main`.
+4. Configure optional env vars for Clerk/Supabase.
+5. Use PR Preview Deployment URLs for review before merge.
+6. Merge to `main` to deploy production.
