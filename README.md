@@ -25,48 +25,27 @@ Interactive equity dilution modeling tool for founders and early-stage financing
 
 ## Local development
 
-```bash
-npm install
-npm run dev
-```
-
-## Verification commands
-
-```bash
-npm test -- --run
-npm run build
-npm audit --omit=dev
-```
-
-## Environment variables
-
-All variables are optional for anonymous/local-only use.
-
-Copy `.env.example` to `.env.local` and fill only the integrations you need.
-
-```bash
-cp .env.example .env.local
-```
-
-- `VITE_CLERK_PUBLISHABLE_KEY`: enables Clerk auth UI.
-- `VITE_SUPABASE_URL`: Supabase project URL for saved scenarios.
-- `VITE_SUPABASE_ANON_KEY`: Supabase anon key for saved scenarios.
-
-## Data model notes
-
-The current core model supports priced rounds, employee reserve/grants, and SAFE/convertible instruments. SAFEs convert in the first priced round by default, or in a user-selected priced round when `conversionRoundId` is set.
-
-Core financial logic lives in `src/model/dilutionEngine.js`. UI code should consume this module rather than duplicating formulas in React components.
-
-## Deployment
-
-### Vercel PR previews
+### PR previews
 
 This repo includes `vercel.json` for Vercel's GitHub integration. After importing the repo in Vercel and setting `main` as the Production Branch, each pull request gets its own Preview Deployment URL before merge. Merging to `main` creates the production deployment.
 
 See `docs/vercel-pr-previews.md` for the one-time dashboard setup and branch protection recommendations.
 
-### Vercel CLI
+### Option 1: Vercel CLI
+```bash
+npm install
+npm run build
+vercel
+```
+
+### Option 2: GitHub + Vercel Dashboard
+1. Push this folder to a GitHub repo
+2. Go to [vercel.com](https://vercel.com) → New Project
+3. Import your repo — Vercel uses `vercel.json` for Vite build settings
+4. Set Production Branch to `main`
+5. Configure optional env vars for Clerk/Supabase
+6. Use PR Preview Deployment URLs for review before merge
+7. Merge to `main` to deploy production
 
 ```bash
 npm install
