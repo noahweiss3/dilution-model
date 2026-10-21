@@ -1,0 +1,32 @@
+{
+  "source-serif-4": {
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/sourceserif4/SourceSerif4[opsz,wght].ttf",
+    "sha256": "97b2d4da6e3cb494b5a1e66ae176914d852ccabef49e0c02c0df25f3e39aca0b",
+    "modified": false,
+    "license": "SIL Open Font License 1.1, bundled alongside font"
+  },
+  "source-sans-3": {
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/sourcesans3/SourceSans3[wght].ttf",
+    "sha256": "042fe2cc0b933e328410d7acbd0aa6a1873dca5aef81875f4bc214b08825c7b9",
+    "modified": false,
+    "license": "SIL Open Font License 1.1, bundled alongside font"
+  },
+  "ibm-plex-sans": {
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/ibmplexsans/IBMPlexSans[wdth,wght].ttf",
+    "sha256": "3b031aa4216174205bd8471f88a49b91f093169e9e87bd5262242bc5967fe2e3",
+    "modified": false,
+    "license": "SIL Open Font License 1.1, bundled alongside font"
+  },
+  "ibm-plex-mono": {
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/ibmplexmono/IBMPlexMono-Regular.ttf",
+    "sha256": "6a3412f058c7d8dfd9170c41e85ade48e5156ecb89356110ca57a0a27734af46",
+    "modified": false,
+    "license": "SIL Open Font License 1.1, bundled alongside font"
+  },
+  "manrope": {
+    "source": "https://raw.githubusercontent.com/google/fonts/main/ofl/manrope/Manrope[wght].ttf",
+    "sha256": "3ae11c49db0455a3cc33e37d380f20fdb8c7f8b41dc07625c177e3d87a9d6ae6",
+    "modified": false,
+    "license": "SIL Open Font License 1.1, bundled alongside font"
+  }
+}

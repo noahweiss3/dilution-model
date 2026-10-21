@@ -6,3 +6,6 @@ dist
 .env
 .env.local
 .env.*.local
+
+# Local visual QA deliverables
+artifacts/
