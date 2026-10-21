@@ -1,6 +1,7 @@
 const { test, expect } = require("@playwright/test");
 async function edit(page, label, value) {
   const field = page.getByLabel(label, { exact: true });
+  await field.focus();
   await field.fill(String(value));
   await field.blur();
 }

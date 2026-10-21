@@ -4,6 +4,13 @@ import ScenariosMenu from "./components/ScenariosMenu.jsx";
 import ModelResults from "./components/ModelResults.jsx";
 import ScenarioComparison from "./components/ScenarioComparison.jsx";
 import {
+  LEGACY_CONVENTION,
+  POST_MONEY_CONVENTION,
+  conventionOf,
+  calculationVersionFor,
+  SAFE_VARIANTS,
+} from "./model/safeConventions.js";
+import {
   activeCase,
   replaceCaseInputs,
   changeWorkspace,
@@ -120,6 +127,8 @@ export default function App({ clerkConfigured = false }) {
   latestWorkspace.current = workspace;
   const currentCase = activeCase(workspace);
   const scenario = currentCase.scenario;
+  const postMoneyReference = conventionOf(scenario) === POST_MONEY_CONVENTION;
+  const firstPricedRound = scenario.rounds.find((r) => r.investment > 0);
   const [undo, setUndo] = useState(null);
   const [comparisonStatus, setComparisonStatus] = useState("");
   const [inputRevision, setInputRevision] = useState(0);
@@ -248,6 +257,21 @@ export default function App({ clerkConfigured = false }) {
   };
 
   const update = (key, value) => setScenario((s) => ({ ...s, [key]: value }));
+  const adoptConvention = (safeConvention) =>
+    setScenario((s) => ({
+      ...s,
+      safeConvention,
+      calculationVersion: calculationVersionFor({ safeConvention }),
+      instruments: s.instruments.map((item) => ({
+        ...item,
+        variant:
+          safeConvention === LEGACY_CONVENTION
+            ? "legacy-generic"
+            : item.variant === "legacy-generic" || item.variant == null
+              ? ""
+              : item.variant,
+      })),
+    }));
   const patch = (key, index, changes) =>
     setScenario((s) => ({
       ...s,
@@ -403,7 +427,7 @@ export default function App({ clerkConfigured = false }) {
         {storageStatus}
       </p>
       {notice && (
-        <div className="notice">
+        <div className="notice" role="region" aria-label="Scenario recovery notice">
           <p>{notice}</p>
           {recovery.original && (
             <button
@@ -588,13 +612,14 @@ export default function App({ clerkConfigured = false }) {
           </section>
           <section>
             <div className="section-heading">
-              <h2>Simplified SAFEs</h2>
+              <h2>SAFE assumptions</h2>
               <button
                 type="button"
                 onClick={() =>
                   add("instruments", {
                     id: createId(),
                     type: "safe",
+                    variant: postMoneyReference ? "" : "legacy-generic",
                     holderName: `SAFE holder ${scenario.instruments.length + 1}`,
                     investment: 250_000,
                     valuationCap: null,
@@ -605,11 +630,84 @@ export default function App({ clerkConfigured = false }) {
                 Add SAFE
               </button>
             </div>
-            <p className="explanation">
-              Prices use the pre-conversion share count. This is not a
-              contractual pre-money or YC post-money SAFE model. Notes,
-              interest, MFN, and pro-rata rights are not modeled.
-            </p>
+            <Field
+              path="safeConvention"
+              label="SAFE calculation convention"
+              error={error("safeConvention")}
+            >
+              {(attrs) => (
+                <select
+                  {...attrs}
+                  value={conventionOf(scenario)}
+                  onChange={(e) => adoptConvention(e.target.value)}
+                >
+                  {![LEGACY_CONVENTION, POST_MONEY_CONVENTION].includes(
+                    conventionOf(scenario),
+                  ) && (
+                    <option value={conventionOf(scenario)}>
+                      Unsupported convention — choose a reference
+                    </option>
+                  )}
+                  <option value={LEGACY_CONVENTION}>
+                    Legacy simplified pre-conversion
+                  </option>
+                  <option value={POST_MONEY_CONVENTION}>
+                    Post-money SAFE reference (YC guide)
+                  </option>
+                </select>
+              )}
+            </Field>
+            {error("calculationVersion") && (
+              <p className="field-error" id={fieldId("calculationVersion")}>
+                {error("calculationVersion")}{" "}
+                {[LEGACY_CONVENTION, POST_MONEY_CONVENTION].includes(
+                  conventionOf(scenario),
+                ) && (
+                  <button
+                    type="button"
+                    onClick={() => adoptConvention(conventionOf(scenario))}
+                  >
+                    Adopt displayed convention
+                  </button>
+                )}
+              </p>
+            )}
+            {postMoneyReference ? (
+              <>
+                <p className="explanation">
+                  Financing pre-money includes SAFE conversions. Calculated
+                  shares may be fractional; actual issuance rounding is not
+                  modeled. All listed SAFEs convert in the first positive-cash
+                  priced round ({firstPricedRound?.name || "none yet"}).
+                </p>
+                <details>
+                  <summary>Supported post-money reference assumptions</summary>
+                  <p>
+                    Existing grants and unallocated pool must be included before
+                    financing. Promised options must already be counted in that
+                    existing capitalization. Financing pool increases, later
+                    SAFE issuance, legacy/pre-money mixtures, notes, MFN,
+                    pro-rata participation, preferences, and exit payouts are
+                    unsupported.
+                  </p>
+                  <p>
+                    Cap-only and discount-only follow the US forms described by
+                    the{" "}
+                    <a href="https://www.ycombinator.com/safe">YC SAFE guide</a>
+                    . Combined cap + discount is a custom/historical reference,
+                    not a current YC standard form. Choosing a convention
+                    changes this case only; duplicate it first to preserve a
+                    comparison.
+                  </p>
+                </details>
+              </>
+            ) : (
+              <p className="explanation">
+                Prices use the pre-conversion share count. This is not a
+                contractual pre-money or YC post-money SAFE model. Notes,
+                interest, MFN, and pro-rata rights are not modeled.
+              </p>
+            )}
             {scenario.instruments.map((s, i) => {
               const path = `instruments.${i}`;
               const target = s.conversionRoundId ?? "";
@@ -646,6 +744,49 @@ export default function App({ clerkConfigured = false }) {
                     }
                     error={error(`${path}.investment`)}
                   />
+                  {postMoneyReference && (
+                    <Field
+                      path={`${path}.variant`}
+                      label={`SAFE ${i + 1} form`}
+                      error={error(`${path}.variant`)}
+                    >
+                      {(attrs) => (
+                        <select
+                          {...attrs}
+                          value={s.variant ?? "legacy-generic"}
+                          onChange={(e) =>
+                            patch("instruments", i, { variant: e.target.value })
+                          }
+                        >
+                          {!SAFE_VARIANTS.some(
+                            (v) => v.value === s.variant,
+                          ) && (
+                            <option value={s.variant ?? "legacy-generic"}>
+                              Choose a supported post-money form
+                            </option>
+                          )}
+                          {SAFE_VARIANTS.map((v) => (
+                            <option key={v.value} value={v.value}>
+                              {v.label}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    </Field>
+                  )}
+                  {!postMoneyReference && error(`${path}.variant`) && (
+                    <p id={fieldId(`${path}.variant`)} className="field-error">
+                      {error(`${path}.variant`)}{" "}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          patch("instruments", i, { variant: "legacy-generic" })
+                        }
+                      >
+                        Use legacy generic terms
+                      </button>
+                    </p>
+                  )}
                   <NumberField
                     path={`${path}.valuationCap`}
                     label={`SAFE ${i + 1} valuation cap ($)`}
@@ -653,7 +794,11 @@ export default function App({ clerkConfigured = false }) {
                     onChange={(valuationCap) =>
                       patch("instruments", i, { valuationCap })
                     }
-                    hint="Zero means uncapped."
+                    hint={
+                      postMoneyReference
+                        ? "Cap-only and custom combined forms require a positive post-money cap. Discount-only requires zero."
+                        : "Zero means uncapped."
+                    }
                     error={error(`${path}.valuationCap`)}
                   />
                   <NumberField
@@ -664,11 +809,21 @@ export default function App({ clerkConfigured = false }) {
                       patch("instruments", i, { discountPct })
                     }
                     error={error(`${path}.discountPct`)}
+                    hint={
+                      postMoneyReference
+                        ? "20% off means the contract Discount Rate is 80%. Cap-only requires zero; discount-only requires a zero cap."
+                        : undefined
+                    }
                   />
                   <Field
                     path={`${path}.conversionRoundId`}
                     label={`SAFE ${i + 1} conversion round`}
                     error={error(`${path}.conversionRoundId`)}
+                    hint={
+                      postMoneyReference
+                        ? "All listed SAFEs are outstanding before the first priced round. Conversion cannot skip it; later issuance timing is unsupported."
+                        : undefined
+                    }
                   >
                     {(attrs) => (
                       <select
@@ -689,7 +844,14 @@ export default function App({ clerkConfigured = false }) {
                           </option>
                         )}
                         {scenario.rounds.map((r, ri) => (
-                          <option key={r.id} value={r.id}>
+                          <option
+                            key={r.id}
+                            value={r.id}
+                            disabled={
+                              postMoneyReference &&
+                              r.id !== firstPricedRound?.id
+                            }
+                          >
                             {r.name} (round {ri + 1})
                           </option>
                         ))}
@@ -782,7 +944,11 @@ export default function App({ clerkConfigured = false }) {
                       patch("rounds", i, { preMoneyVal })
                     }
                     error={error(`${path}.preMoneyVal`)}
-                    hint="Prices the shares outstanding before this round’s conversion and new grants."
+                    hint={
+                      postMoneyReference
+                        ? "Includes all SAFE conversions in the fully diluted pricing denominator. Existing pool is included; no financing pool increase."
+                        : "Prices the shares outstanding before this round’s conversion and new grants."
+                    }
                   />
                   <NumberField
                     path={`${path}.investment`}

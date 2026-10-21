@@ -9,7 +9,12 @@ import {
   entityId,
 } from "./identities.js";
 import { validateScenario } from "./validation.js";
-import { CALCULATION_VERSION } from "./scenarioSchema.js";
+import {
+  calculationVersionFor,
+  conventionOf,
+  POST_MONEY_CONVENTION,
+} from "./safeConventions.js";
+import { pricePostMoneyCohort } from "./postMoneySafe.js";
 export {
   founderKey,
   roundKey,
@@ -75,6 +80,7 @@ export function computeRounds(
   employeeReserve = 0,
   employeesOnCapTablePreGrant = true,
   instruments = [],
+  options = {},
 ) {
   const errors = validateScenario({
     founders,
@@ -82,8 +88,10 @@ export function computeRounds(
     employeeReserve,
     employeesOnCapTablePreGrant,
     instruments,
+    safeConvention: options.safeConvention,
   });
   if (errors.length) throw new Error(errors.map((e) => e.message).join(" "));
+  const postMoneyReference = conventionOf(options) === POST_MONEY_CONVENTION;
   const holderShares = Object.create(null);
   founders.forEach((f, i) => {
     holderShares[founderKey(f, i)] = f.shares;
@@ -92,9 +100,12 @@ export function computeRounds(
     holderShares[RESERVE_KEY] = employeeReserve;
   const snapshot = () => {
     const shares = { ...holderShares };
-    const totalShares = toShares(
-      Object.values(shares).reduce((a, b) => a + b, 0),
-    );
+    const sum = postMoneyReference
+      ? Object.keys(shares)
+          .sort()
+          .reduce((total, key) => total + shares[key], 0)
+      : Object.values(shares).reduce((a, b) => a + b, 0);
+    const totalShares = postMoneyReference ? finiteValue(sum) : toShares(sum);
     const ownership = Object.fromEntries(
       Object.entries(shares)
         .filter(([, n]) => n > 0)
@@ -116,36 +127,63 @@ export function computeRounds(
   let granted = 0;
   rounds.forEach((round, idx) => {
     const starting = states.at(-1);
-    const pricingShares = starting.totalShares;
-    const pricePerShare = finiteValue(round.preMoneyVal / pricingShares);
-    const newInvestorShares = toShares(round.investment / pricePerShare);
+    let pricingShares = starting.totalShares;
+    let pricePerShare = finiteValue(round.preMoneyVal / pricingShares);
+    let newInvestorShares = postMoneyReference
+      ? finiteValue(round.investment / pricePerShare)
+      : toShares(round.investment / pricePerShare);
     if (round.investment > 0 && !newInvestorShares)
       throw new Error(
         "A round investment is too small to issue a whole share. Increase the amount or scale the founder share count.",
       );
-    const safeConversions =
-      round.investment > 0
-        ? instruments.flatMap((s, si) => {
-            const key = safeKey(s, si);
-            const target = s.conversionRoundId;
-            if (
-              converted.has(key) ||
-              !s.investment ||
-              (target != null &&
-                target !== "" &&
-                String(target) !== entityId(round, "round", idx))
-            )
-              return [];
-            converted.add(key);
-            return [conversion(s, si, pricePerShare, pricingShares)];
-          })
-        : [];
+    let safeConversions;
+    if (postMoneyReference) {
+      const pending =
+        round.investment > 0
+          ? instruments
+              .map((s, si) => ({ ...s, id: entityId(s, "safe", si) }))
+              .filter((s) => !converted.has(safeKey(s)))
+          : [];
+      const priced = pricePostMoneyCohort({
+        existingShares: starting.totalShares,
+        preMoney: round.preMoneyVal,
+        investment: round.investment,
+        instruments: pending,
+      });
+      pricingShares = priced.companyCapitalization;
+      pricePerShare = priced.pricePerShare;
+      newInvestorShares = priced.newInvestorShares;
+      safeConversions = priced.conversions;
+      safeConversions.forEach((c) => converted.add(c.key));
+    } else
+      safeConversions =
+        round.investment > 0
+          ? instruments.flatMap((s, si) => {
+              const key = safeKey(s, si);
+              const target = s.conversionRoundId;
+              if (
+                converted.has(key) ||
+                !s.investment ||
+                (target != null &&
+                  target !== "" &&
+                  String(target) !== entityId(round, "round", idx))
+              )
+                return [];
+              converted.add(key);
+              return [conversion(s, si, pricePerShare, pricingShares)];
+            })
+          : [];
     safeConversions.forEach((c) => {
       holderShares[c.key] = c.shares;
     });
-    const safeConversionShares = toShares(
-      safeConversions.reduce((sum, c) => sum + c.shares, 0),
-    );
+    const conversionSum = (
+      postMoneyReference
+        ? [...safeConversions].sort((a, b) => a.key.localeCompare(b.key))
+        : safeConversions
+    ).reduce((sum, c) => sum + c.shares, 0);
+    const safeConversionShares = postMoneyReference
+      ? finiteValue(conversionSum)
+      : toShares(conversionSum);
     const requestedGrantShares = toShares(
       round.grantMode === "pct"
         ? ((round.grantValue || 0) / 100) * employeeReserve
@@ -164,9 +202,9 @@ export function computeRounds(
     const grantValueAtRoundPrice = employeesOnCapTablePreGrant
       ? 0
       : finiteValue(grantShares * pricePerShare);
-    const roundingAdjustment = finiteValue(
-      newInvestorShares * pricePerShare - round.investment,
-    );
+    const roundingAdjustment = postMoneyReference
+      ? 0
+      : finiteValue(newInvestorShares * pricePerShare - round.investment);
     states.push({
       label: round.name,
       stageId: roundKey(round, idx),
@@ -179,6 +217,13 @@ export function computeRounds(
       postMoney: finiteValue(pricePerShare * ending.totalShares),
       pricePerShare,
       pricingShares,
+      ...(postMoneyReference
+        ? {
+            preConversionShares: starting.totalShares,
+            safeCompanyCapitalization: pricingShares,
+            conversionIncludedInPreMoney: true,
+          }
+        : {}),
       newInvestorShares,
       safeConversionShares,
       safeConversions,
@@ -195,6 +240,8 @@ export function computeRounds(
 }
 
 export function calculateScenario(input) {
+  const calculationVersion =
+    input?.calculationVersion ?? calculationVersionFor(input || {});
   const errors = validateScenario(input);
   if (errors.length)
     return {
@@ -202,7 +249,7 @@ export function calculateScenario(input) {
       holders: [],
       errors,
       warnings: [],
-      calculationVersion: CALCULATION_VERSION,
+      calculationVersion,
     };
   try {
     const states = computeRounds(
@@ -211,6 +258,7 @@ export function calculateScenario(input) {
       input.employeeReserve,
       input.employeesOnCapTablePreGrant,
       input.instruments || [],
+      { safeConvention: input.safeConvention },
     );
     const warnings = states
       .slice(1)
@@ -224,6 +272,10 @@ export function calculateScenario(input) {
       input.rounds,
       input.instruments,
     ).filter((h) => states.some((s) => (s.holderShares[h.key] || 0) > 0));
+    if (conventionOf(input) === POST_MONEY_CONVENTION)
+      warnings.unshift(
+        "Post-money reference ownership model: calculated shares may be fractional. Actual issuance rounding is not modeled. All listed SAFEs are outstanding before the first priced round; no financing pool top-up or later SAFE issuance is modeled.",
+      );
     const converted = new Set(
       states.flatMap((s) => (s.safeConversions || []).map((c) => c.key)),
     );
@@ -242,7 +294,7 @@ export function calculateScenario(input) {
       holders,
       errors: [],
       warnings,
-      calculationVersion: CALCULATION_VERSION,
+      calculationVersion,
     };
   } catch (error) {
     return {
@@ -250,7 +302,7 @@ export function calculateScenario(input) {
       holders: [],
       errors: [{ path: "scenario", message: error.message }],
       warnings: [],
-      calculationVersion: CALCULATION_VERSION,
+      calculationVersion,
     };
   }
 }

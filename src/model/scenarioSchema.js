@@ -1,6 +1,12 @@
 import { entityId } from "./identities.js";
-export const CURRENT_SCENARIO_VERSION = 2;
-export const CALCULATION_VERSION = "pre-conversion-v2";
+import {
+  LEGACY_CONVENTION,
+  LEGACY_CALCULATION_VERSION,
+  calculationVersionFor,
+} from "./safeConventions.js";
+export const CURRENT_SCENARIO_VERSION = 3;
+// Compatibility alias: old callers/tests still identify the unchanged legacy math.
+export const CALCULATION_VERSION = LEGACY_CALCULATION_VERSION;
 const EMPTY = {
   founders: [],
   rounds: [],
@@ -30,7 +36,13 @@ function withIds(items, kind, copy) {
 export function createScenarioState(input = EMPTY) {
   return {
     schemaVersion: CURRENT_SCENARIO_VERSION,
-    calculationVersion: CALCULATION_VERSION,
+    calculationVersion:
+      input.calculationVersion ?? calculationVersionFor(input),
+    safeConvention: input.safeConvention ?? LEGACY_CONVENTION,
+    ...(input.promisedOptions != null
+      ? { promisedOptions: input.promisedOptions }
+      : {}),
+    ...(input.poolTopUp != null ? { poolTopUp: input.poolTopUp } : {}),
     founders: withIds(input.founders || [], "founder", (f) => ({
       name: f.name,
       shares: f.shares,
@@ -44,9 +56,14 @@ export function createScenarioState(input = EMPTY) {
       unit: r.unit || "M",
       grantMode: r.grantMode || "shares",
       grantValue: r.grantValue ?? 0,
+      ...(r.poolTopUp != null ? { poolTopUp: r.poolTopUp } : {}),
     })),
     instruments: withIds(input.instruments || [], "safe", (s) => ({
       type: s.type || "safe",
+      variant: s.variant ?? "legacy-generic",
+      ...(s.issuanceAfterRoundId != null
+        ? { issuanceAfterRoundId: s.issuanceAfterRoundId }
+        : {}),
       holderName: s.holderName,
       investment: s.investment,
       valuationCap: s.valuationCap ?? null,
@@ -79,10 +96,10 @@ export function normalizeScenarioState(input, defaults = EMPTY) {
     };
   if (
     input.schemaVersion !== CURRENT_SCENARIO_VERSION ||
-    input.calculationVersion !== CALCULATION_VERSION
+    input.calculationVersion !== calculationVersionFor(input)
   ) {
     warnings.push(
-      "Migrated to schema v2 with stable identities. Original inputs are preserved for recovery; capitalization values are recalculated using the disclosed pre-conversion pricing convention.",
+      "Loaded schema v3 with explicit SAFE conventions and stable identities. Missing conventions retain legacy pre-conversion economics; original inputs are preserved for recovery. Unsupported convention/version tags require an explicit choice before calculation.",
     );
   }
   const source = { ...input };

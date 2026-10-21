@@ -49,7 +49,7 @@ describe("anonymous comparison persistence", () => {
   });
   it("preserves originals before model-version migration and before legacy draft mirroring", () => {
     const w = createWorkspace(DEFAULT_SCENARIO);
-    w.cases[0].scenario.calculationVersion = "previous";
+    w.cases[0].scenario.schemaVersion = 2;
     const original = JSON.stringify(w);
     localStorage.setItem(WORKSPACE_KEY, original);
     const loaded = loadWorkspace(DEFAULT_SCENARIO);
@@ -60,6 +60,19 @@ describe("anonymous comparison persistence", () => {
     expect(localStorage.getItem(`${RECOVERY_PREFIX}workspace`)).toBe(original);
     expect(localStorage.getItem(`${RECOVERY_PREFIX}draft`)).toBe("legacy");
     expect(loaded.warnings).toHaveLength(1);
+  });
+  it("retains an unknown model version as unsupported rather than silently recalculating", () => {
+    const w = createWorkspace(DEFAULT_SCENARIO);
+    w.cases[0].scenario.calculationVersion = "future";
+    const original = JSON.stringify(w);
+    localStorage.setItem(WORKSPACE_KEY, original);
+    const loaded = loadWorkspace(DEFAULT_SCENARIO);
+    expect(loaded.workspace.cases[0].scenario.calculationVersion).toBe(
+      "future",
+    );
+    expect(loaded.original).toBe(original);
+    expect(() => saveWorkspace(loaded.workspace)).toThrow(/errors/);
+    expect(localStorage.getItem(WORKSPACE_KEY)).toBe(original);
   });
   it("does not replace either saved value if a required backup fails", () => {
     const values = new Map([

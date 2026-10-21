@@ -38,6 +38,51 @@ const rows = (ws) => {
 };
 
 describe("canonical workbook", () => {
+  it("exports the actual post-money version, fractions, and bridge without adding converted value twice", async () => {
+    const input = fixture();
+    input.safeConvention = "yc-post-money";
+    input.calculationVersion = "yc-post-money-v1";
+    input.employeeReserve = 0;
+    input.rounds[0].preMoneyVal = 20e6;
+    input.rounds[0].investment = 5e6;
+    input.rounds[0].grantValue = 0;
+    input.instruments[0] = {
+      ...input.instruments[0],
+      variant: "post-money-cap",
+      investment: 1e6,
+      valuationCap: 10e6,
+    };
+    const result = calculateScenario(input);
+    const wb = await buildWorkbook(input);
+    expect(
+      rows(wb.getWorksheet("Assumptions")).find(
+        (r) => r[0] === "Calculation convention",
+      )[1],
+    ).toBe("yc-post-money-v1");
+    expect(wb.getWorksheet("Cap Table").getRow(2).getCell(3).numFmt).toBe(
+      "#,##0.000000",
+    );
+    expect(wb.getWorksheet("Chart Data").getRow(2).getCell(4).numFmt).toBe(
+      "#,##0.000000",
+    );
+    const bridge = wb.getWorksheet("Round Bridge").getRow(2).values.slice(1);
+    expect(bridge[1]).toBe(10e6);
+    expect(bridge[1] + bridge[2] + bridge[3] + bridge[4]).toBeCloseTo(
+      bridge[5],
+      6,
+    );
+    expect(bridge[8]).toBe(0);
+    expect(bridge[7] + bridge[8] + bridge[9] + bridge[10]).toBeCloseTo(
+      bridge[11],
+      6,
+    );
+    expect(bridge[11]).toBeCloseTo(25e6, 6);
+    expect(bridge[12]).toBeCloseTo(result.states[1].pricingShares, 6);
+    expect(bridge[14]).toBeCloseTo(result.states[1].conversionValue, 6);
+    expect(bridge[15]).toBe("yc-post-money-v1");
+    const bytes = await wb.xlsx.writeBuffer();
+    expect(new Uint8Array(bytes)[0]).toBe(0x50);
+  });
   it("exports assumptions, cap table, zero-filled chart data, honestly named values, and bridges", async () => {
     const input = fixture();
     const result = calculateScenario(input);

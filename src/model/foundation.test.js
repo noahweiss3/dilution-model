@@ -191,7 +191,7 @@ describe("foundation financial regressions", () => {
     expect(migrated.scenario.founders).toHaveLength(2);
     expect(new Set(migrated.scenario.founders.map((f) => f.id)).size).toBe(2);
     expect(migrated.scenario.rounds[0].preMoneyVal).toBe(8_550_000);
-    expect(migrated.warnings.join(" ")).toMatch(/recalculat/i);
+    expect(migrated.warnings.join(" ")).toMatch(/retain legacy pre-conversion economics/i);
     expect(normalizeScenarioState(migrated.scenario).scenario).toEqual(
       migrated.scenario,
     );

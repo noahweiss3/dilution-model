@@ -1,4 +1,11 @@
 import { entityId } from "./identities.js";
+import {
+  conventionOf,
+  calculationVersionFor,
+  LEGACY_CONVENTION,
+  POST_MONEY_CONVENTION,
+  postMoneyTermErrors,
+} from "./safeConventions.js";
 const bounded = (n) =>
   typeof n === "number" &&
   Number.isFinite(n) &&
@@ -31,6 +38,38 @@ export function validateScenario(input = {}) {
   }
   const errors = [];
   const add = (path, message) => errors.push({ path, message });
+  const convention = conventionOf(input);
+  const postMoney = convention === POST_MONEY_CONVENTION;
+  const unsupportedPool = (value) =>
+    value != null && value !== 0 && value !== false;
+  if (postMoney && input.promisedOptions != null && input.promisedOptions !== 0)
+    add(
+      "employeeReserve",
+      "Separate promised-option adjustments are unsupported. This reference requires promised options already included in existing fully diluted capitalization.",
+    );
+  if (postMoney && unsupportedPool(input.poolTopUp))
+    add(
+      "employeeReserve",
+      "Financing pool top-ups are unsupported in this reference release.",
+    );
+  if (![LEGACY_CONVENTION, POST_MONEY_CONVENTION].includes(convention))
+    add(
+      "safeConvention",
+      "Unsupported SAFE convention. Choose a supported convention explicitly; the model will not guess.",
+    );
+  if (
+    input.calculationVersion != null &&
+    input.calculationVersion !== calculationVersionFor(input)
+  )
+    add(
+      "calculationVersion",
+      `Unsupported calculation version ${input.calculationVersion}. Explicitly adopt a supported convention to recalculate.`,
+    );
+  if (postMoney && employeeReserve > 0 && !input.employeesOnCapTablePreGrant)
+    add(
+      "employeeReserve",
+      "The post-money reference requires the existing reserve in fully diluted capitalization. Include it before financing or set the reserve to zero.",
+    );
   if (
     input.employeesOnCapTablePreGrant !== undefined &&
     typeof input.employeesOnCapTablePreGrant !== "boolean"
@@ -86,6 +125,11 @@ export function validateScenario(input = {}) {
     );
   rounds.forEach((r, i) => {
     const path = `rounds.${i}`;
+    if (postMoney && unsupportedPool(r.poolTopUp))
+      add(
+        `${path}.grantValue`,
+        "Financing pool top-ups are unsupported; a grant from the existing reserve is a different action.",
+      );
     if (!named(r.name)) add(`${path}.name`, "Enter a round name.");
     if (r.unit != null && !["K", "M"].includes(r.unit))
       add(`${path}.unit`, "Choose thousands or millions as the display unit.");
@@ -119,8 +163,29 @@ export function validateScenario(input = {}) {
   });
   instruments.forEach((s, i) => {
     const path = `instruments.${i}`;
+    if (
+      postMoney &&
+      s.issuanceAfterRoundId != null &&
+      s.issuanceAfterRoundId !== ""
+    )
+      add(
+        `${path}.variant`,
+        "Later SAFE issuance timing is unsupported. All listed SAFEs must be outstanding before the first priced round.",
+      );
     if ((s.type || "safe") !== "safe")
-      add(`${path}.type`, "Only simplified SAFEs are supported in this model.");
+      add(
+        `${path}.type`,
+        "Only the supported SAFE reference forms are modeled; notes and other instruments are unsupported.",
+      );
+    if (postMoney)
+      postMoneyTermErrors(s).forEach((e) =>
+        add(`${path}.${e.field}`, e.message),
+      );
+    else if (s.variant != null && s.variant !== "legacy-generic")
+      add(
+        `${path}.variant`,
+        "A post-money or unknown SAFE form cannot use legacy pricing. Choose the corresponding convention explicitly.",
+      );
     if (!named(s.holderName))
       add(`${path}.holderName`, "Enter a SAFE holder name.");
     if (!bounded(s.investment) || s.investment < 0)
@@ -157,6 +222,11 @@ export function validateScenario(input = {}) {
         add(
           `${path}.conversionRoundId`,
           "SAFE conversion requires a round with positive new investment.",
+        );
+      else if (postMoney && round !== rounds.find((r) => r.investment > 0))
+        add(
+          `${path}.conversionRoundId`,
+          "All listed post-money SAFEs are assumed outstanding before the first priced round and must convert there. Later issuance timing is unsupported.",
         );
     }
   });

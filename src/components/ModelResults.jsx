@@ -10,6 +10,12 @@ import {
 } from "recharts";
 import { chartSnapshots, founderKey } from "../model/dilutionEngine.js";
 import {
+  conventionOf,
+  conventionLabel,
+  POST_MONEY_CONVENTION,
+  variantLabel,
+} from "../model/safeConventions.js";
+import {
   compactMoney,
   money,
   number,
@@ -30,6 +36,7 @@ export default function ModelResults({ result, scenario }) {
   const [mode, setMode] = useState("pct");
   const [selected, setSelected] = useState("");
   const { states, holders } = result;
+  const postMoneyReference = conventionOf(scenario) === POST_MONEY_CONVENTION;
   if (result.errors.length)
     return (
       <section id="results" className="results" aria-label="Results">
@@ -212,7 +219,11 @@ export default function ModelResults({ result, scenario }) {
           <table>
             <caption>
               Ownership by stakeholder and stage
-              {mode === "shares" ? " — whole shares" : " — company equity"}
+              {mode === "shares"
+                ? postMoneyReference
+                  ? " — reference shares (may be fractional)"
+                  : " — whole shares"
+                : " — company equity"}
             </caption>
             <thead>
               <tr>
@@ -337,24 +348,46 @@ export default function ModelResults({ result, scenario }) {
       <details className="model-details">
         <summary>Calculation convention and round bridges</summary>
         <p>
-          Simplified pre-conversion pricing ({result.calculationVersion}): each
-          round prices the shares outstanding before that round’s SAFE
-          conversion and newly issued grants. Cap price uses the same
-          denominator. This is not a contractual pre-money or YC post-money SAFE
-          model.
+          {conventionLabel(scenario)} · {result.calculationVersion}.
         </p>
-        <p>
-          Capitalization at round price includes the marked value of conversion
-          and newly issued grant shares. Those amounts are not additional cash
-          raised. Investors receive the nearest whole share; the bridge includes
-          the resulting monetary adjustment.
-        </p>
+        {postMoneyReference ? (
+          <p>
+            Financing pre-money includes all current SAFE conversions. Company
+            capitalization includes the existing fully diluted shares and all
+            converting SAFEs, before new cash. All listed SAFEs are outstanding
+            before the first positive-cash priced round. Existing pool shares
+            are included; no financing pool increase, later SAFE issuance, MFN,
+            or pro-rata participation is modeled.
+          </p>
+        ) : (
+          <p>
+            Simplified pre-conversion pricing: each round prices the shares
+            outstanding before that round’s SAFE conversion and newly issued
+            grants. Cap price uses the same denominator. This is not a
+            contractual pre-money or YC post-money SAFE model.
+          </p>
+        )}
+        {postMoneyReference ? (
+          <p>
+            Calculated shares may be fractional. This reference ownership model
+            does not round actual share issuance. Conversion marked value is
+            already included in pre-money and is not added again. Capitalization
+            equals pre-money plus new financing cash within numerical precision.
+          </p>
+        ) : (
+          <p>
+            Capitalization at round price includes the marked value of
+            conversion and newly issued grant shares. Those amounts are not
+            additional cash raised. Investors receive the nearest whole share;
+            the bridge includes the resulting monetary adjustment.
+          </p>
+        )}
         {states.slice(1).map((s) => (
           <div className="bridge" key={s.stageId}>
             <h3>{s.label}</h3>
             <p>
-              {number(s.pricingShares)} starting shares +{" "}
-              {number(s.safeConversionShares)} SAFE shares +{" "}
+              {number(s.preConversionShares ?? s.pricingShares)} starting shares
+              + {number(s.safeConversionShares)} SAFE shares +{" "}
               {number(scenario.employeesOnCapTablePreGrant ? 0 : s.grantShares)}{" "}
               new grant shares + {number(s.newInvestorShares)} financing shares
               = {number(s.totalShares)} ending shares.
@@ -363,13 +396,29 @@ export default function ModelResults({ result, scenario }) {
               Price: {money(s.preMoney)} ÷ {number(s.pricingShares)} = $
               {number(s.pricePerShare)} per share.
             </p>
-            <p>
-              {money(s.quotedPostMoney)} quoted pre-money + new cash; +{" "}
-              {money(s.conversionValue)} conversion marked value; +{" "}
-              {money(s.grantValueAtRoundPrice)} new grant marked value; +{" "}
-              {money(s.roundingAdjustment)} share-rounding adjustment ={" "}
-              {money(s.postMoney)} capitalization at round price.
-            </p>
+            {postMoneyReference && (
+              <p>
+                Company capitalization / pricing denominator:{" "}
+                {number(s.safeCompanyCapitalization)} reference shares,
+                including current SAFE conversions.
+              </p>
+            )}
+            {postMoneyReference ? (
+              <p>
+                {money(s.quotedPostMoney)} pre-money + new cash ={" "}
+                {money(s.postMoney)} capitalization at round price.{" "}
+                {money(s.conversionValue)} conversion marked value is already
+                within pre-money.
+              </p>
+            ) : (
+              <p>
+                {money(s.quotedPostMoney)} quoted pre-money + new cash; +{" "}
+                {money(s.conversionValue)} conversion marked value; +{" "}
+                {money(s.grantValueAtRoundPrice)} new grant marked value; +{" "}
+                {money(s.roundingAdjustment)} share-rounding adjustment ={" "}
+                {money(s.postMoney)} capitalization at round price.
+              </p>
+            )}
             <p>
               Grant requested: {number(s.requestedGrantShares)}; available:{" "}
               {number(s.grantBudgetRemaining)}; applied: {number(s.grantShares)}
@@ -377,12 +426,16 @@ export default function ModelResults({ result, scenario }) {
             </p>
             {s.safeConversions.map((c) => (
               <p key={c.key}>
-                {c.holderName}:{" "}
+                {c.holderName}
+                {postMoneyReference
+                  ? ` (${variantLabel(c.variant)})`
+                  : ""}:{" "}
                 {c.candidates
                   .map((p) => `${p.rule}: $${number(p.price)}`)
                   .join("; ")}
                 . Uses {c.rule.toLowerCase()} at ${number(c.conversionPrice)};{" "}
-                {number(c.shares)} shares issued.
+                {number(c.shares)}{" "}
+                {postMoneyReference ? "reference shares." : "shares issued."}
               </p>
             ))}
           </div>

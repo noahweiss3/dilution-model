@@ -1,10 +1,13 @@
 // Lazy-loaded by the app; ExcelJS stays out of the initial bundle.
 import ExcelJS from "exceljs";
 import { calculateScenario, founderKey } from "../model/dilutionEngine.js";
+import { CURRENT_SCENARIO_VERSION } from "../model/scenarioSchema.js";
 import {
-  CALCULATION_VERSION,
-  CURRENT_SCENARIO_VERSION,
-} from "../model/scenarioSchema.js";
+  conventionOf,
+  conventionLabel,
+  POST_MONEY_CONVENTION,
+  variantLabel,
+} from "../model/safeConventions.js";
 
 export async function buildWorkbook(input) {
   const result = calculateScenario(input);
@@ -20,6 +23,8 @@ export async function buildWorkbook(input) {
     employeesOnCapTablePreGrant,
   } = input;
   const { states, holders } = result;
+  const postMoneyReference = conventionOf(input) === POST_MONEY_CONVENTION;
+  const shareFormat = postMoneyReference ? "#,##0.000000" : "#,##0";
   const wb = new ExcelJS.Workbook();
   const assumptions = wb.addWorksheet("Assumptions");
   const founderTotal = founders.reduce((sum, f) => sum + f.shares, 0);
@@ -27,15 +32,19 @@ export async function buildWorkbook(input) {
     ["DILUTION MODEL — ASSUMPTIONS"],
     [`Exported: ${new Date().toISOString()}`],
     ["Scenario schema", CURRENT_SCENARIO_VERSION],
-    ["Calculation convention", CALCULATION_VERSION],
+    ["Calculation convention", result.calculationVersion],
     [
-      "Simplified SAFE: cap and round prices use shares BEFORE conversions and new grants. Not a YC post-money SAFE.",
+      postMoneyReference
+        ? "Post-money reference: financing pre-money INCLUDES all SAFE conversions; existing fully diluted pool included, no financing pool increase. All SAFEs outstanding before the first priced round."
+        : "Legacy simplified SAFE: cap and round prices use shares BEFORE conversions and new grants. Not a contractual pre-money or YC post-money SAFE.",
     ],
     [
       "Capitalization at round price = price × ending shares. Conversion/grant marked value is not new cash.",
     ],
     [
-      "Whole-share issuance is rounded to nearest share; the bridge discloses its monetary adjustment.",
+      postMoneyReference
+        ? "Calculated shares retain theoretical fractions. Actual issuance rounding is not modeled. Conversion marked value is already included in pre-money, not added to the capitalization bridge."
+        : "Whole-share issuance is rounded to nearest share; the bridge discloses its monetary adjustment.",
     ],
     ["INITIAL CAP TABLE"],
     ["Founder", "Shares", "% of Founders", "Holder ID"],
@@ -87,7 +96,7 @@ export async function buildWorkbook(input) {
       ];
     }),
     [],
-    ["SIMPLIFIED SAFEs"],
+    ["SAFE REFERENCES", conventionLabel(input)],
     [
       "Holder",
       "Investment ($)",
@@ -97,6 +106,7 @@ export async function buildWorkbook(input) {
       "MFN (not modeled)",
       "Pro Rata (not modeled)",
       "Instrument ID",
+      "SAFE Form",
     ],
     ...(instruments.length
       ? instruments.map((s) => [
@@ -111,11 +121,13 @@ export async function buildWorkbook(input) {
           s.mfn ? "Yes" : "No",
           s.proRata ? "Yes" : "No",
           String(s.id),
+          variantLabel(s.variant),
         ])
       : [["None"]]),
     [],
     ["MODEL NOTICES"],
     ...result.warnings.map((w) => [w]),
+    ["SAFE model source", "https://www.ycombinator.com/safe"],
   ]);
   assumptions.columns.forEach((c) => {
     c.width = 24;
@@ -155,7 +167,7 @@ export async function buildWorkbook(input) {
   ]);
   for (let r = 2; r <= table.rowCount; r++) {
     for (let c = 2; c <= 1 + states.length * 3; c++)
-      table.getRow(r).getCell(c).numFmt = ["0.00%", "#,##0", '"$"#,##0.00'][
+      table.getRow(r).getCell(c).numFmt = ["0.00%", shareFormat, '"$"#,##0.00'][
         (c - 2) % 3
       ];
   }
@@ -187,7 +199,7 @@ export async function buildWorkbook(input) {
   );
   for (let r = 2; r <= chart.rowCount; r++) {
     chart.getRow(r).getCell(3).numFmt = "0.00%";
-    chart.getRow(r).getCell(4).numFmt = "#,##0";
+    chart.getRow(r).getCell(4).numFmt = shareFormat;
   }
   chart.columns.forEach((c) => {
     c.width = 26;
@@ -225,37 +237,48 @@ export async function buildWorkbook(input) {
   const bridge = wb.addWorksheet("Round Bridge");
   bridge.addRow([
     "Round",
-    "Starting / Pricing Shares",
+    "Starting Shares Before Conversions",
     "SAFE Shares",
     "New Grant Shares",
     "New Investor Shares",
     "Ending Shares",
     "Price / Share ($)",
     "Quoted Pre + Cash ($)",
-    "SAFE Marked Value ($)",
+    "SAFE Value Added to Bridge ($)",
     "Grant Marked Value ($)",
     "Rounding Adjustment ($)",
     "Capitalization at Round Price ($)",
+    "Pricing Denominator Shares",
+    "SAFE Company Capitalization",
+    "SAFE Marked Value ($)",
+    "Calculation Version",
   ]);
   states
     .slice(1)
     .forEach((s) =>
       bridge.addRow([
         s.label,
-        s.pricingShares,
+        s.preConversionShares ?? s.pricingShares,
         s.safeConversionShares,
         employeesOnCapTablePreGrant ? 0 : s.grantShares,
         s.newInvestorShares,
         s.totalShares,
         s.pricePerShare,
         s.quotedPostMoney,
-        s.conversionValue,
+        postMoneyReference ? 0 : s.conversionValue,
         s.grantValueAtRoundPrice,
         s.roundingAdjustment,
         s.postMoney,
+        s.pricingShares,
+        s.safeCompanyCapitalization ?? "",
+        s.conversionValue,
+        result.calculationVersion,
       ]),
     );
   bridge.addRow([]);
+  for (let r = 2; r <= states.length; r++)
+    for (const c of [2, 3, 4, 5, 6, 13, 14])
+      bridge.getRow(r).getCell(c).numFmt = shareFormat;
   bridge.addRow([
     "Conversion Round",
     "Holder",
@@ -266,6 +289,7 @@ export async function buildWorkbook(input) {
     "Round Price ($)",
     "Cap Price ($)",
     "Discount Price ($)",
+    "SAFE Form",
   ]);
   states.forEach((s) =>
     (s.safeConversions || []).forEach((c) =>
@@ -279,6 +303,7 @@ export async function buildWorkbook(input) {
         c.candidates[0].price,
         c.candidates.find((p) => p.rule.startsWith("Valuation"))?.price ?? "",
         c.candidates.find((p) => p.rule.startsWith("Discount"))?.price ?? "",
+        variantLabel(c.variant),
       ]),
     ),
   );

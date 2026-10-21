@@ -1,6 +1,11 @@
 import { createId, founderKey } from "./identities.js";
 import { calculateScenario } from "./dilutionEngine.js";
 import { createScenarioState } from "./scenarioSchema.js";
+import {
+  conventionLabel,
+  calculationVersionFor,
+  variantLabel,
+} from "./safeConventions.js";
 
 export const WORKSPACE_VERSION = 1;
 export const MAX_CASES = 4;
@@ -200,6 +205,16 @@ export function changedAssumptions(cases) {
     const put = (key, label, value, format = "text") =>
       rows.set(key, { key, label, value, format });
     put(
+      "safe-convention",
+      "SAFE calculation convention",
+      conventionLabel(scenario),
+    );
+    put(
+      "calculation-version",
+      "Calculation version",
+      scenario.calculationVersion ?? calculationVersionFor(scenario),
+    );
+    put(
       "reserve",
       "Employee reserve shares",
       scenario.employeeReserve,
@@ -242,6 +257,7 @@ export function changedAssumptions(cases) {
                 ]
               : [
                   ["holderName", "Name"],
+                  ["variant", "SAFE form"],
                   ["investment", "SAFE cash", "money"],
                   ["valuationCap", "Cap (zero means uncapped)", "money"],
                   ["discountPct", "Discount", "percent"],
@@ -251,6 +267,7 @@ export function changedAssumptions(cases) {
                 ];
         for (const [field, title, format] of fields) {
           let value = entity[field];
+          if (field === "variant") value = variantLabel(value);
           if (field === "conversionRoundId")
             value = value
               ? registry.rounds.get(value) || "Missing round"

@@ -6,10 +6,11 @@ import {
   compareCases,
   changedAssumptions,
 } from "../model/comparisonWorkspace.js";
+import { CURRENT_SCENARIO_VERSION } from "../model/scenarioSchema.js";
 import {
-  CALCULATION_VERSION,
-  CURRENT_SCENARIO_VERSION,
-} from "../model/scenarioSchema.js";
+  conventionLabel,
+  calculationVersionFor,
+} from "../model/safeConventions.js";
 import { money, number } from "./ModelFields.jsx";
 
 const ownership = (value) => `${(value * 100).toFixed(3)}%`;
@@ -260,6 +261,18 @@ export default function ScenarioComparison({
                   ))}
                 </tr>
                 <tr>
+                  <th scope="row">SAFE convention / version</th>
+                  {cases.map((c) => (
+                    <td key={c.id}>
+                      {conventionLabel(c.scenario)}
+                      <small>
+                        {c.scenario.calculationVersion ??
+                          calculationVersionFor(c.scenario)}
+                      </small>
+                    </td>
+                  ))}
+                </tr>
+                <tr>
                   <th scope="row">SAFE cash committed</th>
                   {cases.map((c) => (
                     <td key={c.id}>{cell(c, money(c.safeCash))}</td>
@@ -346,10 +359,11 @@ export default function ScenarioComparison({
       <details>
         <summary>Comparison assumptions and model version</summary>
         <p>
-          Schema v{CURRENT_SCENARIO_VERSION} · calculation {CALCULATION_VERSION}
-          . All outcomes are recalculated from case inputs by the same model
-          used for individual results and export. The simplified SAFE pricing
-          and reserve timing assumptions still apply.
+          Schema v{CURRENT_SCENARIO_VERSION}. Each case shows its own convention
+          and calculation version. Outcomes are recalculated by the same model
+          used for individual results and export. Legacy and post-money cases
+          can intentionally produce different ownership from equal cash inputs;
+          review convention changes alongside the other assumptions.
         </p>
         <p>
           Duplicated cases preserve holder and round identities. Renaming does
