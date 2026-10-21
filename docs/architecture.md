@@ -1,82 +1,33 @@
 # Architecture
 
-## High-level structure
+This is a Vite/React client app with optional Clerk authentication and Supabase JSON scenario persistence. Anonymous modeling remains fully local. No database schema or production account data changes are required for the foundation release.
 
-```text
-src/
-  App.jsx                    # UI composition, app state, derived chart/table data
-  main.jsx                   # Clerk provider bootstrap and app mount
-  index.css                  # global tokens/styles
-  components/
-    AuthBar.jsx              # auth display/sign-out controls
-    Modal.jsx                # reusable modal primitives
-    ScenariosMenu.jsx        # saved scenario UI backed by Supabase when configured
-  lib/
-    scenarios.js             # Supabase CRUD for scenarios
-    supabase.js              # Supabase client factory with Clerk token injection
-    exportWorkbook.js        # lazy-loaded ExcelJS workbook export
-  model/
-    dilutionEngine.js        # pure dilution/cap-table math
-    dilutionEngine.test.js   # model regression tests + golden snapshots
+- `src/model/dilutionEngine.js`: pure pricing, conversions, grants, ownership, valuation bridges, chart snapshots, and one validation-aware result.
+- `src/model/identities.js`: persistent entity/holder identities, reserved employee identities, and label metadata.
+- `src/model/validation.js`: domain and shape validation used by calculations, autosave, cloud save callbacks, and export.
+- `src/model/scenarioSchema.js`: scenario/calculation versioning, legacy identity assignment, and input-preserving migration.
+- `src/model/founderAllocation.js`: exact whole-share allocation for split, scale, and equalization.
+- `src/model/examples.js`: explicitly illustrative starting values/templates.
+- `src/App.jsx`: composition, edits, local status, optional saved-scenario controls, validation feedback, keyboard ordering, and export trigger.
+- `src/components/ModelFields.jsx`: labeled text/number controls, editable precision, errors, and pressed-state mode controls.
+- `src/components/ModelResults.jsx`: founder outcomes, discrete stacked ownership columns, numeric cap table, financing values, and inspectable bridges. Financial calculations stay in the engine.
+- `src/lib/localDraft.js`: recoverable local migration, valid-only autosave, and JSON recovery download.
+- `src/lib/exportWorkbook.js`: validation-aware snapshot export; ExcelJS stays lazy-loaded behind the export action.
+- `src/lib/scenarios.js`, `src/lib/supabase.js`, `AuthBar`, `ScenariosMenu`: optional existing authenticated storage. The new schema remains JSON data; no new account permissions are needed.
+
+See [model-formulas.md](model-formulas.md) for the precise supported convention and exclusions, and [foundation-acceptance.md](foundation-acceptance.md) for the release walkthrough.
+
+## Checks
+
+```sh
+npm ci
+npm test -- --run
+npm run build
+npm audit --omit=dev
 ```
 
-## Runtime modes
+CI runs the regression suite, production build, and production dependency audit. Browser checks are required before claiming mobile, chart rendering, download, or keyboard flows verified. Actual authenticated save/load and protected preview access receive separate smoke tests; anonymous tests are not evidence of backend correctness.
 
-The app works without backend env vars:
+## Dependency fixes
 
-- no Clerk/Supabase configured: anonymous mode with localStorage autosave only;
-- Clerk + Supabase configured: authenticated users can save/load named scenarios.
-
-`main.jsx` checks `VITE_CLERK_PUBLISHABLE_KEY`. `ScenariosMenu` also checks Supabase configuration before rendering persistence controls.
-
-## State flow
-
-`App.jsx` owns the scenario state:
-
-- `founders`
-- `employeeReserve`
-- `employeesOnCapTablePreGrant`
-- `rounds`
-- `instruments` (SAFE/convertible inputs)
-- UI-only state such as active tab and chart mode
-
-Derived cap-table states are computed with:
-
-```js
-computeRounds(founders, rounds, employeeReserve, employeesOnCapTablePreGrant, instruments)
-```
-
-The scenario state is autosaved to localStorage under `dilution-model:current`. Saved scenarios store the same serializable shape in Supabase `scenarios.data`.
-
-## Domain boundary
-
-Financial formulas belong in `src/model/dilutionEngine.js`, not inside React components. This keeps the model testable and prepares the app for SAFE/convertible instruments and AI-generated state actions.
-
-When adding new model features:
-
-1. Add/extend pure domain functions first.
-2. Add tests for formulas and edge cases.
-3. Update UI components to call the model.
-4. Update exports/docs last.
-
-## Export architecture
-
-Spreadsheet export is intentionally dynamic:
-
-```js
-const { exportWorkbook } = await import('./lib/exportWorkbook.js')
-```
-
-This keeps ExcelJS out of the initial app bundle. `exportWorkbook.js` builds four sheets:
-
-1. Assumptions
-2. Cap Table
-3. Chart Data
-4. Waterfall
-
-## Known architecture pressure points
-
-- `App.jsx` still contains too much UI and should be split into panels/components.
-- Scenario state is versioned and schema-validated; future migrations should extend `src/model/scenarioSchema.js`.
-- Supabase schema/RLS migrations are not yet in repo.
-- SAFE/convertible MVP supports default first-priced-round conversion plus per-instrument `conversionRoundId` timing; later instrument variants need richer mechanics.
+Compatible transitive patches update `ws`, `tmp`, and both `brace-expansion` versions. Scoped overrides select patched `js-cookie` for Clerk shared and `uuid` 11 for ExcelJS. ExcelJS only uses the compatible `v4` API; its Node workbook round-trip and browser XLSX download are regression checked. These overrides avoid the audit's proposed ExcelJS downgrade. No shared credentials are embedded or changed.
