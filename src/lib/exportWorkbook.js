@@ -1,183 +1,310 @@
-// Build & download the dilution-model workbook.
-// Imported dynamically from App.jsx so ExcelJS (~700KB) only loads on user click.
-import ExcelJS from 'exceljs'
+// Lazy-loaded by the app; ExcelJS stays out of the initial bundle.
+import ExcelJS from "exceljs";
+import { calculateScenario, founderKey } from "../model/dilutionEngine.js";
+import {
+  CALCULATION_VERSION,
+  CURRENT_SCENARIO_VERSION,
+} from "../model/scenarioSchema.js";
 
-export async function buildWorkbook({
-  founders, employeeReserve, employeesOnCapTablePreGrant, rounds, instruments = [], states, allKeys,
-}) {
-  const wb = new ExcelJS.Workbook()
+export async function buildWorkbook(input) {
+  const result = calculateScenario(input);
+  if (result.errors.length)
+    throw new Error(
+      `Cannot export an invalid scenario: ${result.errors.map((e) => e.message).join(" ")}`,
+    );
+  const {
+    founders,
+    rounds,
+    instruments = [],
+    employeeReserve,
+    employeesOnCapTablePreGrant,
+  } = input;
+  const { states, holders } = result;
+  const wb = new ExcelJS.Workbook();
+  const assumptions = wb.addWorksheet("Assumptions");
+  const founderTotal = founders.reduce((sum, f) => sum + f.shares, 0);
+  assumptions.addRows([
+    ["DILUTION MODEL — ASSUMPTIONS"],
+    [`Exported: ${new Date().toISOString()}`],
+    ["Scenario schema", CURRENT_SCENARIO_VERSION],
+    ["Calculation convention", CALCULATION_VERSION],
+    [
+      "Simplified SAFE: cap and round prices use shares BEFORE conversions and new grants. Not a YC post-money SAFE.",
+    ],
+    [
+      "Capitalization at round price = price × ending shares. Conversion/grant marked value is not new cash.",
+    ],
+    [
+      "Whole-share issuance is rounded to nearest share; the bridge discloses its monetary adjustment.",
+    ],
+    ["INITIAL CAP TABLE"],
+    ["Founder", "Shares", "% of Founders", "Holder ID"],
+    ...founders.map((f, i) => [
+      f.name,
+      f.shares,
+      f.shares / founderTotal,
+      founderKey(f, i),
+    ]),
+    ["TOTAL FOUNDER SHARES", founderTotal, 1],
+    [],
+    ["EMPLOYEE RESERVE"],
+    ["Reserved Shares", employeeReserve],
+    [
+      "Reserve on cap table before grants?",
+      employeesOnCapTablePreGrant ? "Yes" : "No",
+    ],
+    [],
+    ["FUNDING ROUNDS"],
+    [
+      "#",
+      "Round Name",
+      "Pre-Money Val ($)",
+      "New Cash ($)",
+      "Display Unit",
+      "Grant Mode",
+      "Grant Value",
+      "Grant Shares Resolved",
+      "Grant Shares Requested",
+      "Available Shares",
+      "Unfulfilled Shares",
+      "Round ID",
+    ],
+    ...rounds.map((r, i) => {
+      const s = states[i + 1];
+      return [
+        i + 1,
+        r.name,
+        r.preMoneyVal,
+        r.investment,
+        r.unit || "M",
+        r.grantMode || "shares",
+        r.grantValue || 0,
+        s.grantShares,
+        s.requestedGrantShares,
+        s.grantBudgetRemaining,
+        s.unfulfilledGrantShares,
+        s.roundId,
+      ];
+    }),
+    [],
+    ["SIMPLIFIED SAFEs"],
+    [
+      "Holder",
+      "Investment ($)",
+      "Valuation Cap ($)",
+      "Discount %",
+      "Conversion Round",
+      "MFN (not modeled)",
+      "Pro Rata (not modeled)",
+      "Instrument ID",
+    ],
+    ...(instruments.length
+      ? instruments.map((s) => [
+          s.holderName,
+          s.investment,
+          s.valuationCap || "",
+          s.discountPct || 0,
+          s.conversionRoundId == null || s.conversionRoundId === ""
+            ? "First positive-investment round"
+            : rounds.find((r) => String(r.id) === String(s.conversionRoundId))
+                ?.name,
+          s.mfn ? "Yes" : "No",
+          s.proRata ? "Yes" : "No",
+          String(s.id),
+        ])
+      : [["None"]]),
+    [],
+    ["MODEL NOTICES"],
+    ...result.warnings.map((w) => [w]),
+  ]);
+  assumptions.columns.forEach((c) => {
+    c.width = 24;
+  });
+  assumptions.getColumn(1).width = 44;
 
-  // ─── Assumptions ──────────────────────────────────────────────────────
-  const wsA = wb.addWorksheet('Assumptions')
-  wsA.addRow(['DILUTION MODEL — ASSUMPTIONS'])
-  wsA.addRow([`Exported: ${new Date().toISOString()}`])
-  wsA.addRow([])
-  wsA.addRow(['INITIAL CAP TABLE'])
-  wsA.addRow(['Founder', 'Shares', '% of Founders'])
-  const founderTotal = founders.reduce((s, f) => s + (f.shares || 0), 0) || 1
-  founders.forEach(f => {
-    wsA.addRow([f.name, f.shares || 0, (f.shares || 0) / founderTotal])
-  })
-  wsA.addRow(['TOTAL FOUNDER SHARES', founderTotal, 1])
-  wsA.addRow([])
-  wsA.addRow(['EMPLOYEE RESERVE'])
-  wsA.addRow(['Reserved Shares', employeeReserve])
-  wsA.addRow(['Reserve on cap table before grants?', employeesOnCapTablePreGrant ? 'Yes' : 'No'])
-  wsA.addRow([])
-  wsA.addRow(['FUNDING ROUNDS'])
-  wsA.addRow(['#', 'Round Name', 'Pre-Money Val ($)', 'Investment ($)', 'Display Unit', 'Grant Mode', 'Grant Value', 'Grant Shares Resolved'])
-  rounds.forEach((r, i) => {
-    const grantShares = r.grantMode === 'pct'
-      ? Math.round(((r.grantValue || 0) / 100) * (employeeReserve || 0))
-      : (r.grantValue || 0)
-    wsA.addRow([
-      i + 1, r.name, r.preMoneyVal || 0, r.investment || 0, r.unit || 'K',
-      r.grantMode || 'shares', r.grantValue || 0, grantShares,
-    ])
-  })
-  wsA.addRow([])
-  wsA.addRow(['SAFE / CONVERTIBLES'])
-  wsA.addRow(['Holder', 'Investment ($)', 'Valuation Cap ($)', 'Discount %', 'Conversion Round', 'MFN', 'Pro Rata'])
-  if (instruments.length === 0) {
-    wsA.addRow(['None'])
-  } else {
-    instruments.forEach(instrument => {
-      wsA.addRow([
-        instrument.holderName || 'SAFE Holder',
-        instrument.investment || 0,
-        instrument.valuationCap || '',
-        instrument.discountPct || 0,
-        instrument.conversionRoundId == null || instrument.conversionRoundId === ''
-          ? 'First priced round'
-          : rounds.find(round => String(round.id) === String(instrument.conversionRoundId))?.name || 'Unknown round',
-        instrument.mfn ? 'Yes' : 'No',
-        instrument.proRata ? 'Yes' : 'No',
-      ])
-    })
-  }
-  ;[32, 22, 20, 20, 14, 14, 14, 22].forEach((w, i) => { wsA.getColumn(i + 1).width = w })
-
-  // ─── Cap Table ────────────────────────────────────────────────────────
-  const wsT = wb.addWorksheet('Cap Table')
-  const tableHeader = ['Stakeholder', ...states.flatMap(s => [`${s.label} — %`, `${s.label} — Shares`, `${s.label} — Value ($)`])]
-  wsT.addRow(tableHeader)
-  allKeys.forEach(key => {
-    const row = [key]
-    states.forEach(s => {
-      const pct = s.ownership[key]
-      if (pct === undefined) { row.push('', '', ''); return }
-      const shares = Math.round(pct * s.totalShares)
-      const value = s.postMoney ? pct * s.postMoney : ''
-      row.push(pct, shares, value)
-    })
-    wsT.addRow(row)
-  })
-  const totalsRow = ['TOTAL']
-  states.forEach(s => {
-    const totalPct = Object.values(s.ownership).reduce((sum, v) => sum + (v || 0), 0)
-    totalsRow.push(totalPct, s.totalShares, s.postMoney || '')
-  })
-  wsT.addRow(totalsRow)
-  wsT.addRow([])
-  wsT.addRow(['Round', 'Pre-Money', 'Investment', 'Post-Money', 'Price/Share', 'Total Shares', 'New Investor Shares', 'Grant Shares', 'SAFE Conversion Shares'])
-  states.slice(1).forEach(s => {
-    wsT.addRow([
-      s.label,
-      s.preMoney || 0,
-      s.investment || 0,
-      s.postMoney || 0,
-      s.pricePerShare || 0,
+  const table = wb.addWorksheet("Cap Table");
+  table.addRow([
+    "Stakeholder",
+    ...states.flatMap((s) => [
+      `${s.label} — %`,
+      `${s.label} — Shares`,
+      `${s.label} — Value at round price ($)`,
+    ]),
+    "Holder ID",
+  ]);
+  holders.forEach((h) =>
+    table.addRow([
+      h.displayName,
+      ...states.flatMap((s) => [
+        s.ownership[h.key] || 0,
+        s.holderShares[h.key] || 0,
+        s.pricePerShare == null
+          ? ""
+          : (s.holderShares[h.key] || 0) * s.pricePerShare,
+      ]),
+      h.key,
+    ]),
+  );
+  table.addRow([
+    "TOTAL",
+    ...states.flatMap((s) => [
+      Object.values(s.ownership).reduce((a, b) => a + b, 0),
       s.totalShares,
-      s.newInvestorShares || 0,
-      s.grantShares || 0,
-      s.safeConversionShares || 0,
-    ])
-    ;(s.safeConversions || []).forEach(conversion => {
-      wsT.addRow([
-        `${s.label} SAFE`,
-        conversion.holderName,
-        conversion.investment || 0,
-        conversion.conversionPrice || 0,
-        conversion.shares || 0,
-        conversion.valuationCap || '',
-        conversion.discountPct || 0,
-      ])
-    })
-  })
-  // Triplet format on stakeholder + totals rows: %, shares, $-value.
-  const stakeholderEndRow = 1 + allKeys.length + 1
-  for (let r = 2; r <= stakeholderEndRow; r++) {
-    wsT.getRow(r).eachCell({ includeEmpty: false }, (cell, col) => {
-      if (col === 1 || typeof cell.value !== 'number') return
-      const tripletPos = (col - 2) % 3
-      if (tripletPos === 0) cell.numFmt = '0.00%'
-      else if (tripletPos === 1) cell.numFmt = '#,##0'
-      else cell.numFmt = '"$"#,##0'
-    })
+      s.postMoney ?? "",
+    ]),
+  ]);
+  for (let r = 2; r <= table.rowCount; r++) {
+    for (let c = 2; c <= 1 + states.length * 3; c++)
+      table.getRow(r).getCell(c).numFmt = ["0.00%", "#,##0", '"$"#,##0.00'][
+        (c - 2) % 3
+      ];
   }
-  // Round-metadata block: $ on $-cols, integer on share counts.
-  const metaHeaderRow = stakeholderEndRow + 2
-  for (let r = metaHeaderRow + 1; r <= wsT.rowCount; r++) {
-    wsT.getRow(r).eachCell({ includeEmpty: false }, (cell, col) => {
-      if (typeof cell.value !== 'number') return
-      cell.numFmt = (col >= 2 && col <= 5) ? '"$"#,##0' : '#,##0'
-    })
-  }
-  wsT.getColumn(1).width = 28
-  for (let c = 2; c <= tableHeader.length; c++) wsT.getColumn(c).width = 14
+  table.columns.forEach((c) => {
+    c.width = 22;
+  });
+  table.getColumn(1).width = 32;
 
-  // ─── Chart Data ───────────────────────────────────────────────────────
-  const wsC = wb.addWorksheet('Chart Data')
-  wsC.addRow(['Round', 'Stakeholder', '% Ownership', 'Shares'])
-  states.forEach(s => {
-    allKeys.forEach(key => {
-      const pct = s.ownership[key]
-      if (pct === undefined) return
-      wsC.addRow([s.label, key, pct, Math.round(pct * s.totalShares)])
-    })
-  })
-  for (let r = 2; r <= wsC.rowCount; r++) {
-    const c3 = wsC.getRow(r).getCell(3)
-    if (typeof c3.value === 'number') c3.numFmt = '0.00%'
-    const c4 = wsC.getRow(r).getCell(4)
-    if (typeof c4.value === 'number') c4.numFmt = '#,##0'
+  const chart = wb.addWorksheet("Chart Data");
+  chart.addRow([
+    "Round",
+    "Stakeholder",
+    "% Ownership",
+    "Shares",
+    "Holder ID",
+    "Stage ID",
+  ]);
+  states.forEach((s) =>
+    holders.forEach((h) =>
+      chart.addRow([
+        s.label,
+        h.displayName,
+        s.ownership[h.key] || 0,
+        s.holderShares[h.key] || 0,
+        h.key,
+        s.stageId,
+      ]),
+    ),
+  );
+  for (let r = 2; r <= chart.rowCount; r++) {
+    chart.getRow(r).getCell(3).numFmt = "0.00%";
+    chart.getRow(r).getCell(4).numFmt = "#,##0";
   }
-  ;[18, 28, 14, 14].forEach((w, i) => { wsC.getColumn(i + 1).width = w })
+  chart.columns.forEach((c) => {
+    c.width = 26;
+  });
 
-  // ─── Waterfall ────────────────────────────────────────────────────────
-  const wsW = wb.addWorksheet('Waterfall')
-  wsW.addRow(['Round', 'Pre-Money ($)', 'Investment ($)', 'Post-Money ($)', ...founders.map(f => `${f.name} value ($)`)])
-  states.slice(1).forEach(s => {
-    const row = [s.label, s.preMoney || 0, s.investment || 0, s.postMoney || 0]
-    founders.forEach(f => {
-      const ownPct = s.ownership[f.name] || 0
-      row.push(s.postMoney ? ownPct * s.postMoney : '')
-    })
-    wsW.addRow(row)
-  })
-  for (let r = 2; r <= wsW.rowCount; r++) {
-    wsW.getRow(r).eachCell({ includeEmpty: false }, cell => {
-      if (typeof cell.value === 'number') cell.numFmt = '"$"#,##0'
-    })
+  const financing = wb.addWorksheet("Financing Values");
+  financing.addRow([
+    "Round",
+    "Pricing Pre-Money ($)",
+    "New Cash ($)",
+    "Capitalization at Round Price ($)",
+    ...founders.map((f) => `${f.name} value at round price ($)`),
+  ]);
+  states
+    .slice(1)
+    .forEach((s) =>
+      financing.addRow([
+        s.label,
+        s.preMoney,
+        s.investment,
+        s.postMoney,
+        ...founders.map(
+          (f, i) => (s.holderShares[founderKey(f, i)] || 0) * s.pricePerShare,
+        ),
+      ]),
+    );
+  for (let r = 2; r <= financing.rowCount; r++)
+    financing.getRow(r).eachCell((c, i) => {
+      if (i > 1) c.numFmt = '"$"#,##0.00';
+    });
+  financing.columns.forEach((c) => {
+    c.width = 26;
+  });
+
+  const bridge = wb.addWorksheet("Round Bridge");
+  bridge.addRow([
+    "Round",
+    "Starting / Pricing Shares",
+    "SAFE Shares",
+    "New Grant Shares",
+    "New Investor Shares",
+    "Ending Shares",
+    "Price / Share ($)",
+    "Quoted Pre + Cash ($)",
+    "SAFE Marked Value ($)",
+    "Grant Marked Value ($)",
+    "Rounding Adjustment ($)",
+    "Capitalization at Round Price ($)",
+  ]);
+  states
+    .slice(1)
+    .forEach((s) =>
+      bridge.addRow([
+        s.label,
+        s.pricingShares,
+        s.safeConversionShares,
+        employeesOnCapTablePreGrant ? 0 : s.grantShares,
+        s.newInvestorShares,
+        s.totalShares,
+        s.pricePerShare,
+        s.quotedPostMoney,
+        s.conversionValue,
+        s.grantValueAtRoundPrice,
+        s.roundingAdjustment,
+        s.postMoney,
+      ]),
+    );
+  bridge.addRow([]);
+  bridge.addRow([
+    "Conversion Round",
+    "Holder",
+    "Instrument ID",
+    "Winning Rule",
+    "Conversion Price ($)",
+    "Shares",
+    "Round Price ($)",
+    "Cap Price ($)",
+    "Discount Price ($)",
+  ]);
+  states.forEach((s) =>
+    (s.safeConversions || []).forEach((c) =>
+      bridge.addRow([
+        s.label,
+        c.holderName,
+        c.id,
+        c.rule,
+        c.conversionPrice,
+        c.shares,
+        c.candidates[0].price,
+        c.candidates.find((p) => p.rule.startsWith("Valuation"))?.price ?? "",
+        c.candidates.find((p) => p.rule.startsWith("Discount"))?.price ?? "",
+      ]),
+    ),
+  );
+  bridge.columns.forEach((c) => {
+    c.width = 28;
+  });
+  for (const ws of wb.worksheets) {
+    ws.views = [{ state: "frozen", ySplit: 1 }];
+    ws.getRow(1).font = { bold: true };
   }
-  wsW.getColumn(1).width = 16
-  for (let c = 2; c <= 4 + founders.length; c++) wsW.getColumn(c).width = 18
-
-  return wb
+  return wb;
 }
 
 export async function exportWorkbook(args, filename) {
-  const wb = await buildWorkbook(args)
-  const buffer = await wb.xlsx.writeBuffer()
-  const blob = new Blob([buffer], {
-    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  URL.revokeObjectURL(url)
+  const wb = await buildWorkbook(args);
+  const buffer = await wb.xlsx.writeBuffer();
+  const url = URL.createObjectURL(
+    new Blob([buffer], {
+      type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }),
+  );
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
