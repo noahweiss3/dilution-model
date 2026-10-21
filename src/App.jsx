@@ -2,6 +2,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import AuthBar from "./components/AuthBar.jsx";
 import ScenariosMenu from "./components/ScenariosMenu.jsx";
 import ModelResults from "./components/ModelResults.jsx";
+import ScenarioComparison from "./components/ScenarioComparison.jsx";
+import {
+  activeCase,
+  replaceCaseInputs,
+  changeWorkspace,
+} from "./model/comparisonWorkspace.js";
+import { loadWorkspace, saveWorkspace } from "./lib/comparisonStorage.js";
 import {
   Field,
   NumberField,
@@ -26,7 +33,6 @@ import {
 } from "./model/founderAllocation.js";
 import {
   loadLocalDraft,
-  saveLocalDraft,
   downloadText,
   RECOVERY_PREFIX,
 } from "./lib/localDraft.js";
@@ -99,50 +105,147 @@ function ScaleFounders({ founders, onScale }) {
 }
 
 export default function App({ clerkConfigured = false }) {
-  const [initial] = useState(() => loadLocalDraft(DEFAULT_SCENARIO));
-  const [scenario, setScenario] = useState(initial.scenario);
+  const [initial] = useState(() => {
+    const draft = loadLocalDraft(DEFAULT_SCENARIO);
+    const comparison = loadWorkspace(draft.scenario);
+    return {
+      ...draft,
+      workspace: comparison.workspace,
+      workspaceOriginal: comparison.original,
+      warnings: [...draft.warnings, ...comparison.warnings],
+    };
+  });
+  const [workspace, setWorkspace] = useState(initial.workspace);
+  const latestWorkspace = useRef(workspace);
+  latestWorkspace.current = workspace;
+  const currentCase = activeCase(workspace);
+  const scenario = currentCase.scenario;
+  const [undo, setUndo] = useState(null);
+  const [comparisonStatus, setComparisonStatus] = useState("");
+  const [inputRevision, setInputRevision] = useState(0);
+  const lastValid = useRef(
+    new Map(
+      initial.workspace.cases
+        .filter((c) => !calculateScenario(c.scenario).errors.length)
+        .map((c) => [c.id, c.scenario]),
+    ),
+  );
+  const setScenario = (updater) => {
+    setUndo(null);
+    setComparisonStatus("");
+    setWorkspace((w) =>
+      replaceCaseInputs(
+        w,
+        w.activeId,
+        typeof updater === "function"
+          ? updater(activeCase(w).scenario)
+          : updater,
+      ),
+    );
+  };
   const [notice, setNotice] = useState(initial.warnings.join(" "));
   const [recovery, setRecovery] = useState(() => ({
     key: `${RECOVERY_PREFIX}${createId()}`,
     original: initial.original,
+  }));
+  const [workspaceRecovery] = useState(() => ({
+    key: `${RECOVERY_PREFIX}${createId()}`,
+    original: initial.workspaceOriginal,
   }));
   const [storageStatus, setStorageStatus] = useState("Saving local draft…");
   const [exportError, setExportError] = useState("");
   const [exporting, setExporting] = useState(false);
   const [template, setTemplate] = useState("Seed");
   const [draftErrors, setDraftErrors] = useState({});
+  const latestDraftErrors = useRef(draftErrors);
+  latestDraftErrors.current = draftErrors;
   const calculation = useMemo(() => calculateScenario(scenario), [scenario]);
   const result = {
     ...calculation,
     errors: [
       ...calculation.errors,
-      ...Object.entries(draftErrors).map(([path, message]) => ({
+      ...Object.entries(draftErrors).map(([path, details]) => ({
         path,
-        message,
+        message: details.message,
       })),
     ],
   };
   const valid = result.errors.length === 0;
+  const workspaceValid =
+    valid &&
+    workspace.cases.every(
+      (c) =>
+        c.id === currentCase.id || !calculateScenario(c.scenario).errors.length,
+    );
   const error = (path) => result.errors.find((e) => e.path === path)?.message;
   const foundersTotal = scenario.founders.reduce((sum, f) => sum + f.shares, 0);
   const granted = result.states.at(-1)?.holderShares[GRANTED_KEY] || 0;
 
   useEffect(() => {
-    if (!valid) {
+    if (valid) lastValid.current.set(currentCase.id, scenario);
+    if (!workspaceValid) {
       setStorageStatus(
-        "Changes with errors are not saved. Your last valid draft is retained.",
+        "Changes with errors are not saved. Your last valid comparison workspace is retained.",
       );
       return;
     }
     try {
-      saveLocalDraft(scenario, recovery);
-      setStorageStatus("Local draft saved in this browser.");
+      saveWorkspace(workspace, [recovery, workspaceRecovery]);
+      setStorageStatus("Comparison workspace saved in this browser.");
     } catch {
       setStorageStatus(
-        "Local saving is unavailable. Keep this tab open and export a valid model to retain your work. The prior draft was not intentionally replaced.",
+        "Local saving is unavailable. Keep this tab open and export valid cases individually to retain your work. The prior workspace was not intentionally replaced.",
       );
     }
-  }, [scenario, valid, recovery]);
+  }, [
+    workspace,
+    workspaceValid,
+    valid,
+    scenario,
+    currentCase.id,
+    recovery,
+    workspaceRecovery,
+  ]);
+
+  const actOnWorkspace = (action) => {
+    if (
+      ["switch", "duplicate", "pin", "rename"].includes(action.type) &&
+      !valid
+    )
+      throw Error("Fix or discard invalid edits before changing cases.");
+    const next = changeWorkspace(workspace, action);
+    const labels = {
+      reset: "reset",
+      remove: "removal",
+      pin: "baseline change",
+    };
+    setUndo(
+      labels[action.type]
+        ? { workspace, draftErrors, label: labels[action.type] }
+        : null,
+    );
+    setWorkspace(next);
+    if (action.type !== "rename") setDraftErrors({});
+    setExportError("");
+    setInputRevision((v) => v + 1);
+    setComparisonStatus(
+      {
+        reset: "Active case reset to the baseline inputs.",
+        remove: "Case removed from this browser workspace.",
+        pin: `${activeCase(next).name} is now the baseline.`,
+        duplicate: "Independent copy created. Edit its inputs below.",
+        rename: "Case renamed.",
+        switch: `Editing ${activeCase(next).name}.`,
+      }[action.type],
+    );
+  };
+  const undoWorkspace = () => {
+    setWorkspace(undo.workspace);
+    setDraftErrors(undo.draftErrors);
+    setInputRevision((v) => v + 1);
+    setComparisonStatus(`Undid ${undo.label}.`);
+    setUndo(null);
+  };
 
   const update = (key, value) => setScenario((s) => ({ ...s, [key]: value }));
   const patch = (key, index, changes) =>
@@ -171,17 +274,28 @@ export default function App({ clerkConfigured = false }) {
     return createScenarioState(scenario);
   };
   const applyScenario = (data) => {
+    const latest = latestWorkspace.current;
+    if (latest.activeId !== currentCase.id) return;
     const loaded = normalizeScenarioState(data, DEFAULT_SCENARIO);
     if (loaded.needsBackup)
       setRecovery({
         key: `${RECOVERY_PREFIX}${createId()}`,
         original: JSON.stringify(data),
       });
-    setScenario(loaded.scenario);
+    setUndo({
+      workspace: latest,
+      draftErrors: latestDraftErrors.current,
+      label: "cloud load",
+    });
+    setWorkspace(replaceCaseInputs(latest, currentCase.id, loaded.scenario));
+    setInputRevision((v) => v + 1);
+    setComparisonStatus("Cloud scenario loaded into the active local case.");
     setDraftErrors({});
     setNotice(loaded.warnings.join(" "));
   };
-  const setFounderPct = (index, value) => {
+  const setFounderPct = (index, value, raw) => {
+    setUndo(null);
+    setComparisonStatus("");
     const path = `founders.${index}.split`;
     try {
       const founders = redistributeFounderPercent(
@@ -196,7 +310,10 @@ export default function App({ clerkConfigured = false }) {
       });
       update("founders", founders);
     } catch (e) {
-      setDraftErrors((errors) => ({ ...errors, [path]: e.message }));
+      setDraftErrors((errors) => ({
+        ...errors,
+        [path]: { message: e.message, draft: raw ?? String(value) },
+      }));
     }
   };
   const scaleFounders = (target) => {
@@ -230,10 +347,16 @@ export default function App({ clerkConfigured = false }) {
     setExportError("");
     try {
       const snapshot = getScenarioState();
+      const caseName =
+        currentCase.name
+          .normalize("NFKD")
+          .replace(/[^a-zA-Z0-9_-]+/g, "-")
+          .replace(/^-|-$/g, "")
+          .slice(0, 64) || "case";
       const { exportWorkbook } = await import("./lib/exportWorkbook.js");
       await exportWorkbook(
         snapshot,
-        `dilution-model-${new Date().toISOString().slice(0, 10)}.xlsx`,
+        `dilution-model-${caseName}-${new Date().toISOString().slice(0, 10)}.xlsx`,
       );
     } catch (e) {
       setExportError(e.message || "Export failed. Please try again.");
@@ -254,6 +377,7 @@ export default function App({ clerkConfigured = false }) {
         </div>
         <div className="header-actions">
           <ScenariosMenu
+            key={currentCase.id}
             clerkConfigured={clerkConfigured}
             getScenarioState={getScenarioState}
             applyScenarioState={applyScenario}
@@ -262,6 +386,7 @@ export default function App({ clerkConfigured = false }) {
             type="button"
             className="primary"
             disabled={!valid || exporting}
+            title={`Export ${currentCase.name} only`}
             onClick={doExport}
           >
             {exporting ? "Exporting…" : "Export .xlsx"}
@@ -270,6 +395,7 @@ export default function App({ clerkConfigured = false }) {
         </div>
       </header>
       <nav className="mobile-nav" aria-label="Model sections">
+        <a href="#comparison">Compare cases</a>
         <a href="#model-inputs">Edit inputs</a>
         <a href="#results">View results</a>
       </nav>
@@ -287,6 +413,19 @@ export default function App({ clerkConfigured = false }) {
               }
             >
               Download original inputs
+            </button>
+          )}
+          {workspaceRecovery.original && (
+            <button
+              type="button"
+              onClick={() =>
+                downloadText(
+                  workspaceRecovery.original,
+                  "dilution-original-comparison.json",
+                )
+              }
+            >
+              Download original comparison
             </button>
           )}
           <button
@@ -315,8 +454,32 @@ export default function App({ clerkConfigured = false }) {
           </ul>
         </div>
       )}
+      <ScenarioComparison
+        workspace={workspace}
+        valid={valid}
+        canDiscard={lastValid.current.has(currentCase.id)}
+        onAction={actOnWorkspace}
+        onDiscard={() => {
+          setScenario(
+            createScenarioState(lastValid.current.get(currentCase.id)),
+          );
+          setDraftErrors({});
+          setInputRevision((v) => v + 1);
+          setComparisonStatus(
+            "Invalid edits discarded; last valid inputs restored.",
+          );
+        }}
+        undo={undo}
+        onUndo={undoWorkspace}
+        status={comparisonStatus}
+      />
       <main className="app-layout">
-        <aside id="model-inputs" className="inputs" aria-label="Model inputs">
+        <aside
+          key={`${currentCase.id}-${inputRevision}`}
+          id="model-inputs"
+          className="inputs"
+          aria-label="Model inputs"
+        >
           <p className="explanation">
             Starting values and round templates are illustrative examples, not
             market benchmarks. Edit them to explore your own scenario.
@@ -383,7 +546,8 @@ export default function App({ clerkConfigured = false }) {
                       path={`founders.${i}.split`}
                       label={`Founder ${i + 1} share of founder equity (%)`}
                       value={(f.shares / foundersTotal) * 100}
-                      onChange={(v) => setFounderPct(i, v)}
+                      draftOverride={draftErrors[`founders.${i}.split`]?.draft}
+                      onChange={(v, raw) => setFounderPct(i, v, raw)}
                       error={error(`founders.${i}.split`)}
                       hint="Redistributes the same total shares among founders. This is not fully diluted company ownership."
                     />
@@ -688,7 +852,11 @@ export default function App({ clerkConfigured = false }) {
               ))}
             </div>
           )}
-          <ModelResults result={result} scenario={scenario} />
+          <ModelResults
+            key={currentCase.id}
+            result={result}
+            scenario={scenario}
+          />
         </div>
       </main>
     </>
