@@ -24,18 +24,22 @@ export function loadLocalDraft(defaults, storage = localStorage) {
   }
 }
 
-export function saveLocalDraft(input, recovery, storage = localStorage) {
-  const result = calculateScenario(input);
-  if (result.errors.length)
-    throw new Error("Fix scenario errors before saving.");
+export function preserveOriginal(recovery, storage = localStorage) {
   if (recovery?.original) {
     const existing = storage.getItem(recovery.key);
     if (existing != null && existing !== recovery.original)
       throw new Error(
         "Recovery key conflict; original draft was not overwritten.",
       );
-    storage.setItem(recovery.key, recovery.original);
+    if (existing == null) storage.setItem(recovery.key, recovery.original);
   }
+}
+
+export function saveLocalDraft(input, recovery, storage = localStorage) {
+  const result = calculateScenario(input);
+  if (result.errors.length)
+    throw new Error("Fix scenario errors before saving.");
+  preserveOriginal(recovery, storage);
   storage.setItem(
     DRAFT_KEY,
     JSON.stringify({

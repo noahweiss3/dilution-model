@@ -47,8 +47,14 @@ export function Field({ path, label, error, hint, children }) {
   );
 }
 
-export function NumberField({ value, onChange, scale = 1, ...props }) {
-  const [draft, setDraft] = useState(null);
+export function NumberField({
+  value,
+  onChange,
+  scale = 1,
+  draftOverride,
+  ...props
+}) {
+  const [draft, setDraft] = useState(draftOverride ?? null);
   const [focused, setFocused] = useState(false);
   useEffect(() => {
     // An external correction (equalize, scale, or scenario load) must replace
@@ -65,7 +71,13 @@ export function NumberField({ value, onChange, scale = 1, ...props }) {
           value={draft == null ? number(value / scale) : draft}
           onFocus={() => {
             setFocused(true);
-            setDraft(Number.isFinite(value) ? String(value / scale) : "");
+            setDraft((current) =>
+              props.error && current != null
+                ? current
+                : Number.isFinite(value)
+                  ? String(value / scale)
+                  : "",
+            );
           }}
           onChange={(e) => {
             const raw = e.target.value;
@@ -74,7 +86,7 @@ export function NumberField({ value, onChange, scale = 1, ...props }) {
             const parsed = /^-?(?:\d+\.?\d*|\.\d+)$/.test(cleaned)
               ? Number(cleaned)
               : NaN;
-            onChange(scale === 1 ? parsed : Math.round(parsed * scale));
+            onChange(scale === 1 ? parsed : Math.round(parsed * scale), raw);
           }}
           onBlur={() => setFocused(false)}
         />

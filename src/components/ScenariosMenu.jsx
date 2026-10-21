@@ -32,6 +32,8 @@ export default function ScenariosMenu({ getScenarioState, applyScenarioState, cl
   const [currentId, setCurrentId] = useState(null)
   const [currentName, setCurrentName] = useState(null)
   const ref = useRef(null)
+  const active = useRef(true)
+  useEffect(() => { active.current = true; return () => { active.current = false } }, [])
 
   // Modal state — one of: null, { type: 'saveAs' }, { type: 'rename', scenario },
   // { type: 'delete', scenario }, { type: 'message', text }.
@@ -92,6 +94,9 @@ export default function ScenariosMenu({ getScenarioState, applyScenarioState, cl
   const handleLoad = async (id) => {
     try {
       const row = await loadScenario(supabase, id)
+      // Local case switches remount this menu. Ignore a response belonging to
+      // a case that is no longer active instead of replacing another case.
+      if (!active.current) return
       applyScenarioState(row.data)
       setCurrentId(row.id)
       setCurrentName(row.name)
@@ -166,7 +171,7 @@ export default function ScenariosMenu({ getScenarioState, applyScenarioState, cl
               padding: '6px 12px', letterSpacing: '0.06em',
               fontFamily: 'DM Mono', cursor: 'pointer',
             }}
-          >SCENARIOS ▾</button>
+          >CLOUD SAVES ▾</button>
           {open && (
             <div style={{
               position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 100,
